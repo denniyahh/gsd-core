@@ -35,13 +35,13 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| STATE-01 | Unassigned | Pending |
-| QUALITY-01 | Unassigned | Pending |
+| STATE-01 | Phase 1 | Pending |
+| QUALITY-01 | Phase 1 | Pending |
 
 **Coverage:**
 - v1 requirements: 2 total
-- Mapped to phases: 0
-- Unmapped: 2 ⚠️
+- Mapped to phases: 2
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-08-02*
