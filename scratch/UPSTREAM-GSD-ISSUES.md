@@ -625,6 +625,105 @@ surface it.
 
 ---
 
+## 10. `model` and `effort` resolve through different mechanisms at different times, and the docs assert a symmetry that does not exist
+
+**Status:** READY — not yet filed
+**Found:** 2026-08-02, DevFlow — routing subagent models/effort so the session model reaches the executor
+**Component:** `gsd-core/bin/lib/model-resolver.cjs`, `install-effort-resolver.cjs`,
+`config-loader.cjs` (`loadConfigResolved`, branch D), `commands.cjs` (`cmdEffortSync` `:579-641`),
+`references/model-profiles.md`
+**Severity:** medium-high — four independent paths that produce a silently wrong value, one of which
+reshapes 20+ agents the user never named
+**Reproducibility: confirmed**, each item below verified by direct test against live source, not read
+off documentation.
+
+This is an enhancement request rather than a single bug: the individual behaviours are each
+defensible in isolation, but together they make "which model and effort will this agent actually run
+at?" unanswerable without reading the resolver source.
+
+### What the docs claim
+
+`references/model-profiles.md` § Resolution Logic:
+
+> The same precedence applies to `reasoning_effort` resolution on runtimes that support it (Codex),
+> so `model` and `reasoning_effort` always derive from the same tier source.
+
+### What actually happens
+
+- **`model`** resolves at **runtime**, per spawn, from `.planning/config.json`.
+- **`effort`** (claude runtime) resolves at **install time** and is baked into
+  `~/.claude/agents/*.md` frontmatter. A config change has no effect until
+  `gsd-tools query effort sync --apply` is run.
+
+Four consequences follow, each verified:
+
+**10a — `resolve-execution` reports an effort the agent will not use.** With `effort:` deleted from
+`~/.claude/agents/gsd-executor.md` (so Claude Code inherits the session effort),
+`query resolve-execution gsd-executor --pick effort` still reports `high`. The query surface is not
+a source of truth for effort; only the frontmatter is.
+
+**10b — `~/.gsd/defaults.json` is authoritative for one setting and inert for the other.** For
+`model` it is only consulted when the directory has **no `.planning/`** (branch D of
+`loadConfigResolved`). For `effort` it *is* honoured everywhere, because `cmdEffortSync` deliberately
+uses the install-time resolver — its own comment says the runtime resolver "would silently ignore
+home-level effort changes." Verified with `GSD_HOME` pointed at a fixture setting
+`model_overrides.gsd-executor=haiku`: resolved `haiku` in a bare dir, `sonnet` in a dir with
+`.planning/config.json`, and `sonnet` in a dir with `.planning/` but no `config.json`. A file named
+`defaults.json` in the global config dir therefore does not apply to any real project's models, and
+nothing signals this.
+
+**10c — creating an `effort` block disables the built-in tier defaults.**
+`resolveInstallTimeEffort` consults `EFFORT_MANIFEST_TIER_DEFAULTS` only when `effortCfg` is
+**null**; once the block exists but lacks `routing_tier_defaults`, resolution falls through to
+`effort.default` → `'high'`. Verified: adding four `agent_overrides` produced a **23-agent** dry-run
+diff that *downgraded* `gsd-assumptions-analyzer` and `gsd-debug-session-manager` xhigh→high and
+*upgraded* `gsd-codebase-mapper` low→high. Adding one override silently reshapes every agent the
+user did not mention. Re-declaring `{light: low, standard: high, heavy: xhigh}` restored the
+intended 7-agent diff.
+
+**10d — `effort` cannot express inheritance; `model` can.** Claude Code documents agent-frontmatter
+`effort:` as *"Default: inherits from session"* and provides **no `inherit` literal**, while `model:`
+accepts both omission and the literal `inherit`. GSD's `EFFORT_SET` is
+`minimal|low|medium|high|xhigh|max` with no way to emit nothing, so GSD cannot express effort
+inheritance at all. Compounding it, `cmdEffortSync` reads an absent key as `null`, which never equals
+the target value, so it **re-adds** the key on every apply — a hand-strip is silently undone by the
+next sync or reinstall.
+
+### Why part of this complexity is justified
+
+Claude Code's `Agent()` tool has **no effort parameter**, so effort genuinely cannot be passed per
+spawn — frontmatter is the only available channel. Effort surfaces also differ per runtime (codex
+takes `-c model_reasoning_effort=<level>` on argv; claude takes frontmatter), so one mechanism cannot
+serve both. The install-time/frontmatter design is a reasonable response to a real platform
+constraint. **The four items above are not that constraint** — they are layering, reporting, and
+expressiveness choices made on top of it, and each is independently fixable.
+
+### Suggested shapes (any subset closes part of the gap)
+
+1. **Accept `inherit` in `EFFORT_SET` and have the frontmatter writer omit the key for it.** Closes
+   10d and makes "follow the session" a first-class, declarable choice rather than a hand-edit that
+   the next sync reverts.
+2. **Merge `routing_tier_defaults` over the manifest defaults instead of replacing them.** Closes
+   10c — a partial config should not discard built-ins.
+3. **Have `resolve-execution` read the frontmatter, or report `resolved` and `effective`
+   separately.** Closes 10a — the query must not claim a value the agent will not use.
+4. **Either honour `~/.gsd/defaults.json` as a base layer beneath project config for all keys, or
+   warn when a project config exists and the global file sets keys that will be ignored.** Closes
+   10b. The warning alone would be a large improvement over silence.
+5. **Correct `model-profiles.md`** — drop or qualify the "same precedence" sentence, which is false
+   for claude runtimes, and document the install-time/runtime split plus the need to re-run
+   `effort sync` after changing effort config.
+
+### Local workaround
+
+`~/.local/bin/gsd-prefs` (written 2026-08-02): runs `effort sync --apply --runtime claude`, then
+re-strips `effort:` from the inherit set (`gsd-executor`, `gsd-code-reviewer`, `gsd-debugger`),
+then applies per-project `model_overrides`. Ordering is load-bearing — the strip must follow the
+sync. `--check` reports drift; `--agents-only` does the global half. Must be re-run for every new
+project and after every GSD update, which is precisely the manual upkeep suggestion 1 would remove.
+
+---
+
 ## Preventing recurrence — the meta-finding (2026-07-31)
 
 Two entries in this file (**1** and **6**) recurred in phase 28, three days after being written up
@@ -644,9 +743,10 @@ accurate issue log did not catch a repeat defect, because logging is not enforce
 | Same, as a backstop | A `pre-commit` hook that refuses a commit touching `.planning/phases/**` while `HEAD` is on `main`/`develop` |
 | `[ci skip]` wedging a PR | After `/gsd-ship`, assert `gh pr view <n> --json mergeStateStatus` is not `BLOCKED` with an empty rollup; if it is, amend the ship note and force-push with lease |
 
-**Filing status: none of these nine entries has been filed upstream.** That is the single highest-
+**Filing status: none of these ten entries has been filed upstream.** That is the single highest-
 leverage action remaining — entries 1, 6, 8, and 9 are now each confirmed reproducible (2/2, 4/4,
-2/2, 2/2 respectively), which is the evidence an upstream maintainer needs.
+2/2, 2/2 respectively), and entry 10's four sub-findings were each verified by direct test against
+live source, which is the evidence an upstream maintainer needs.
 
 ---
 
@@ -654,5 +754,9 @@ leverage action remaining — entries 1, 6, 8, and 9 are now each confirmed repr
 records for entries 1 and 6, and the "Preventing recurrence" section. Updated 2026-08-02 during
 phase 30 planning with entries 8 (`query commit` double-joins absolute `--files` paths) and 9
 (`state.planned-phase` frontmatter resync has no preserve-guard for `status`/`last_activity_desc`),
-both root-caused against live source and both confirmed 2/2 recurring. Update `Status:` and record
-the issue link when each entry is filed upstream.*
+both root-caused against live source and both confirmed 2/2 recurring. Updated 2026-08-02 with entry
+10 (model/effort resolve through different mechanisms at different times) — an enhancement request
+rather than a defect report, covering the `~/.gsd/defaults.json` model/effort asymmetry, the
+tier-default loss on partial effort config, the `resolve-execution` effort divergence, and the
+missing `inherit` for effort. Update `Status:` and record the issue link when each entry is filed
+upstream.*
