@@ -40,7 +40,7 @@ The codebase is an npm package built primarily from TypeScript/CommonJS runtime 
 - **Generated artifacts**: Regenerate and verify derived registries, skills, and runtime artifacts when their canonical inputs change — stale generated output is a release risk.
 - **Verification**: Add a reproducing regression test for each confirmed defect and run focused checks before broader suites — the project has extensive specialized test coverage.
 - **Tooling**: Use Node.js 22+ and npm 10+ — enforced by `package.json`.
-- **Planning storage**: Keep `.planning/` local — this repository’s `.gitignore` intentionally excludes it.
+- **Planning storage**: Track `.planning/` in this fork — project context, requirements, roadmap, and verification history must travel with contribution work.
 - **DevFlow**: Do not invoke DevFlow — the project owner has deferred its use.
 
 ## Key Decisions
@@ -50,7 +50,7 @@ The codebase is an npm package built primarily from TypeScript/CommonJS runtime 
 | Broad project objective: contribute upstream bug fixes and features | The project is ongoing; any one issue ledger is only a milestone input | — Pending |
 | First milestone covers ledger item 9 only | The user chose a narrow state-integrity slice with mandatory regression coverage; item 10 is deferred intact to v2 | — Pending |
 | Codebase map before initialization | Brownfield architecture and risk context should inform requirements and roadmap | ✓ Good |
-| Keep planning artifacts local | The repository deliberately ignores `.planning/` | ✓ Good |
+| Track planning artifacts in this fork | The project owner explicitly wants planning context versioned with contribution work | ✓ Good |
 | Hold DevFlow use | The project owner considers it not mature enough for this workflow | — Pending |
 
 ## Evolution
