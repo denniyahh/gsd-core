@@ -19,12 +19,12 @@ Every contribution must make GSD more reliable without regressing its supported 
 ### Active
 
 - [ ] STATE-01: Planning a phase preserves authoritative `STATE.md` frontmatter activity metadata when its body contains stale same-date prose. (Ledger item 9.)
-- [ ] EFFORT-01: A contributor can determine and configure the effective model and reasoning effort for each agent without partial overrides or inheritance changing unrelated defaults. (Ledger item 10.)
-- [ ] QUALITY-01: Each first-milestone fix has a focused reproducing regression test and targeted verification before an upstream pull request is opened.
+- [ ] QUALITY-01: The item-9 fix has a focused reproducing regression test and targeted verification before an upstream pull request is opened.
 
 ### Out of Scope
 
 - Ledger items 6 and 7 — valid safety/compatibility enhancements, deferred from the first milestone to keep the initial contribution set implementation-ready.
+- Ledger item 10 — deferred intact to v2 requirements; partial implementation would create a policy mismatch across its resolver, install, reporting, and documentation surfaces.
 - DevFlow orchestration — explicitly paused until the project owner re-enables it.
 - Unrelated feature work — deferred until the first milestone is completed or the roadmap is revised.
 
@@ -32,7 +32,7 @@ Every contribution must make GSD more reliable without regressing its supported 
 
 The codebase is an npm package built primarily from TypeScript/CommonJS runtime modules and declarative Markdown workflows. It installs and projects artifacts for multiple coding-agent runtimes, so source, generated artifacts, and runtime-specific behavior must remain aligned.
 
-`scratch/UPSTREAM-GSD-ISSUES.md` records evidence gathered while dogfooding. The first milestone focuses on confirmed items 9 (planned-phase frontmatter synchronization) and 10 (model/effort configuration consistency). The codebase map under `.planning/codebase/` records the current architecture, stack, conventions, tests, and risks.
+`scratch/UPSTREAM-GSD-ISSUES.md` records evidence gathered while dogfooding. The first milestone focuses on confirmed item 9 (planned-phase frontmatter synchronization); item 10 (model/effort configuration consistency) remains documented research for a later milestone. The codebase map under `.planning/codebase/` records the current architecture, stack, conventions, tests, and risks.
 
 ## Constraints
 
@@ -48,7 +48,7 @@ The codebase is an npm package built primarily from TypeScript/CommonJS runtime 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
 | Broad project objective: contribute upstream bug fixes and features | The project is ongoing; any one issue ledger is only a milestone input | — Pending |
-| First milestone covers ledger items 9 and 10 | Both are confirmed and implementation-ready; items 6 and 7 are deferred enhancements | — Pending |
+| First milestone covers ledger item 9 only | The user chose a narrow state-integrity slice with mandatory regression coverage; item 10 is deferred intact to v2 | — Pending |
 | Codebase map before initialization | Brownfield architecture and risk context should inform requirements and roadmap | ✓ Good |
 | Keep planning artifacts local | The repository deliberately ignores `.planning/` | ✓ Good |
 | Hold DevFlow use | The project owner considers it not mature enough for this workflow | — Pending |

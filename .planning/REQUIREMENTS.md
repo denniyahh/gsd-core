@@ -1,0 +1,48 @@
+# Requirements: GSD Core Contributions
+
+**Defined:** 2026-08-02
+**Core Value:** Every contribution must make GSD more reliable without regressing its supported runtime and generated-artifact contracts.
+
+## v1 Requirements
+
+### State Integrity
+
+- [ ] **STATE-01**: A GSD project maintainer can run `state planned-phase` without stale same-date body prose overwriting authoritative `last_activity` or `last_activity_desc` frontmatter.
+
+### Verification
+
+- [ ] **QUALITY-01**: A contributor can verify STATE-01 through a focused command-level regression that asserts the final `STATE.md` frontmatter and preserves intentional planned-phase status, body, and plan-count behavior.
+
+## v2 Requirements
+
+### Effective Effort Configuration
+
+- **EFFORT-01**: A contributor can apply partial effort configuration without changing manifest tier defaults for unnamed agents.
+- **EFFORT-02**: A contributor can select Claude effort inheritance and get stable installed-agent frontmatter that omits `effort:` rather than writing an unsupported literal.
+- **EFFORT-03**: A contributor can distinguish configured policy, installed value, and runtime-effective or predicted effort in existing inspection output.
+- **EFFORT-04**: A contributor can read accurate documentation of model versus effort resolution, runtime differences, and explicit synchronization requirements.
+
+## Out of Scope
+
+| Feature | Reason |
+|---------|--------|
+| Ledger items 6 and 7 | Valid enhancements, but not part of this state-integrity milestone. |
+| Partial item-10 implementation | Its resolver, installer, reporting, and documentation changes must remain one coherent future slice. |
+| DevFlow orchestration | Explicitly paused by the project owner. |
+| Broad STATE.md synchronization rewrite | STATE-01 is a narrow preservation defect; broad ownership changes risk valid transition compatibility. |
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| STATE-01 | Unassigned | Pending |
+| QUALITY-01 | Unassigned | Pending |
+
+**Coverage:**
+- v1 requirements: 2 total
+- Mapped to phases: 0
+- Unmapped: 2 ⚠️
+
+---
+*Requirements defined: 2026-08-02*
+*Last updated: 2026-08-02 after initial scope selection*
