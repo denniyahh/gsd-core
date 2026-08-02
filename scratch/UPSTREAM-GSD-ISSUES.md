@@ -747,6 +747,82 @@ project and after every GSD update, which is precisely the manual upkeep suggest
 
 ---
 
+## 11. `query progress` reports `percent: 100` while plans remain unexecuted, because it divides summaries by plans across phases where the two do not correspond
+
+**Status:** READY — not yet filed
+**Found:** 2026-08-02, DevFlow phase 30 wave 2, auditing a suspected plan-count discrepancy
+**Component:** `gsd-core/bin/lib/commands.cjs` (`total_plans` / `total_summaries` / `percent`)
+**Severity:** medium-high — a progress meter that reads *complete* while work is outstanding, on a
+tool whose central promise is never silently reporting success
+**Reproducibility: confirmed**, deterministic from the current repository state.
+
+### What happens
+
+`query progress` on DevFlow returns:
+
+```
+percent: 100    total_plans: 139    total_summaries: 140
+```
+
+while phase 30 is mid-execution with `plans=5, summaries=3, status="In Progress"` — two plans not
+yet executed, one of them running at the moment of the query.
+
+### Root cause
+
+`percent` is computed from `total_summaries / total_plans` aggregated across the whole milestone.
+That assumes one summary per plan. Four phases in this repository break the assumption in the
+*numerator's* favour:
+
+| Phase | plans | summaries |
+|---|---|---|
+| 02 | 0 | 1 |
+| 03 | 0 | 1 |
+| 08 | 0 | 1 |
+| 14 | 4 | 5 |
+
+These are legacy phases that produced a SUMMARY without a correspondingly-named PLAN (early phases
+used a bare `PLAN.md` rather than `NN-PLAN.md`, and some recorded a summary with no plan file at
+all). The surplus of **+4** masks phase 30's genuine deficit of **−2**, pushing the ratio to
+`140/139` — over 1.0, reported as `100`.
+
+So the meter does not merely round up. It is **structurally capable of reporting 100% while an
+arbitrary amount of work is outstanding**, provided enough legacy summary/plan mismatches exist
+elsewhere in the milestone to absorb the shortfall.
+
+### Why this is worse than a cosmetic rounding bug
+
+The number is surfaced where it is most likely to be trusted without checking: the GSD statusline
+renders it as a progress bar. An operator glancing at `[██████████] 100%` has no signal that a phase
+is mid-flight. On this project it read `100%` while an executor was actively running.
+
+It also fails silently in the direction that matters. A meter that under-reports prompts
+investigation; one that over-reports to exactly 100% invites the conclusion that nothing remains.
+
+### Not the same as stale STATE.md counts
+
+`.planning/STATE.md` carries a cached `progress:` block that legitimately lags the live query — that
+is a snapshot, not a defect. This entry is about the **live** computation being wrong.
+
+### Suggested fixes (1 alone is sufficient; 2 and 3 are hardening)
+
+1. **Clamp and, better, compute completion per phase rather than by aggregate ratio.** A phase is
+   complete when every one of its plans has a summary; milestone percent is completed-phases over
+   total-phases, or a plan-level count that cannot exceed its denominator.
+2. **Never emit `percent > 100`, and treat `total_summaries > total_plans` as a data-integrity
+   warning** rather than silently normalising it. The surplus is real information: it means some
+   phase's artifacts do not correspond.
+3. **Refuse `100` while any phase's `status` is `In Progress`.** A cheap, independent guard: the
+   phase status is already computed in the same result object, so the inconsistency is detectable
+   without new machinery.
+
+### Local workaround
+
+None applied. The number is read-only and advisory; DevFlow's own gates do not consume it.
+Operators should treat the statusline percentage as unreliable near completion and check
+`query progress` phase-by-phase instead.
+
+---
+
 ## Preventing recurrence — the meta-finding (2026-07-31)
 
 Two entries in this file (**1** and **6**) recurred in phase 28, three days after being written up
