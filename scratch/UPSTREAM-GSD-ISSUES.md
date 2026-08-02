@@ -5,13 +5,16 @@ dogfooding DevFlow. **Not DevFlow defects** — DevFlow can only work around the
 maintained in the personal GSD Core fork; DevFlow's `.planning/UPSTREAM-GSD-ISSUES.md` links here.
 Each entry is written to be pasted into a GSD Core issue as-is.
 
-Status legend: `READY` = written up, not yet filed · `FILED` = filed upstream, link recorded.
+Status legend: `READY` = written up, not yet filed · `FILED` = filed upstream, link recorded ·
+`VALIDATED` = current behavior/source supports the report, but it is a compatibility or safety
+enhancement rather than a confirmed defect · `CONFIRMED` = reproduced against current upstream ·
+`DONE` = covered by an upstream fix or open fix PR, link recorded.
 
 ---
 
 ## 1. `ship.md` `track_shipping` pushes `[ci skip]`, wedging any PR with required status checks
 
-**Status:** READY — not yet filed
+**Status:** DONE — open upstream PR [#2818](https://github.com/open-gsd/gsd-core/pull/2818)
 **Found:** 2026-07-28, DevFlow phase 25 ship (`denniyahh/devflow` PR #47)
 **RECURRED:** 2026-07-31, DevFlow phase 28 ship (`denniyahh/devflow` PR #63) — identical
 symptom, identical cause, ~3 days later. See "Recurrence record" below.
@@ -138,6 +141,8 @@ its own write-up before filing.
 
 ### 2. `api-coverage.verify-pre` fires on negated prose
 
+**Status:** DONE — open upstream PR [#2817](https://github.com/open-gsd/gsd-core/pull/2817)
+
 `gsd-tools check api-coverage.verify-pre` blocked `/gsd-verify-work 25` reporting "external-API
 integration detected without a coverage matrix". The triggering text was `25-01-PLAN.md:105`:
 
@@ -149,6 +154,8 @@ no negation handling, so a sentence explicitly denying API integration satisfies
 is to author a `COVERAGE.md` enumerating an API surface that does not exist.
 
 ### 3. `check predicate` implements no predicate kinds
+
+**Status:** DONE — open upstream PR [#2816](https://github.com/open-gsd/gsd-core/pull/2816)
 
 The capability registry declares the security ship gate as:
 
@@ -171,6 +178,8 @@ declaration is decorative.
 
 ### 4. `phase.complete` and `state.update` advance into backlog headings
 
+**Status:** DONE — open upstream PR [#2815](https://github.com/open-gsd/gsd-core/pull/2815)
+
 Both wrote `current_phase: 999.1 / BACKLOG` into `STATE.md` after phase 25 completed, treating a
 `999.x` backlog heading as the next sequential phase. Corrected twice manually in one session.
 DevFlow's own `STATE.md` history log records the identical bug being caught after phase 20, so this
@@ -179,6 +188,8 @@ promotion.
 
 ### 5. `broken-windows` capability description overstates enforcement
 
+**Status:** DONE — open upstream PR [#2814](https://github.com/open-gsd/gsd-core/pull/2814)
+
 The capability's top-level `description` says it "Blocks `/gsd-ship` while any window is open",
 with no qualifier. `WINDOWS.md`'s generated header says the same. Only the `workflow.windows_enforce`
 knob description is accurate: the gate is **opt-in and off by default**; tracking is on, enforcement
@@ -186,6 +197,11 @@ is not. Two of three documentation surfaces assert a guarantee the default confi
 provide — which misled this session into believing the ledger was gating a ship it never gated.
 
 ### 6. `query commit` will commit onto a protected integration branch with no guard
+
+**Status:** VALIDATED — reproduced against current upstream: with the default
+`git.branching_strategy: "none"`, `query commit` committed successfully on `develop`. This is a
+safety enhancement because the documented `none` contract intentionally commits on the current
+branch; the low-risk fix is an early warning on the resolved base branch, not a blanket refusal.
 
 `gsd_run query commit "<msg>" --files <paths>` commits to whatever branch the working tree is
 currently on, with no check against the project's own declared branch model. Observed twice in one
@@ -272,7 +288,9 @@ and *gets* none, with no diagnostic anywhere.
 
 ## 7. No way to express "`Agent` exists, but my session will not outlive this turn"
 
-**Status:** READY — not yet filed
+**Status:** VALIDATED — the compatibility gap and stale Claude blocking claim remain in current
+`execute-phase.md`; the historical one-shot-host failure was not rerun because it requires that
+external host lifecycle
 **Type: compatibility gap / feature request**, not a defect report. GSD's behavior here is correct
 under the runtime it targets; this asks for a distinction it currently cannot make.
 **Found:** 2026-07-31, while running GSD under DevFlow (`denniyahh/devflow` phase 29)
@@ -362,7 +380,8 @@ parallelism, and does not address subagents backgrounding by default.
 
 ## 8. `query commit --files <path>` silently drops any absolute path, because it double-joins it onto `cwd`
 
-**Status:** READY — not yet filed
+**Status:** DONE — already fixed upstream by [#2638](https://github.com/open-gsd/gsd-core/pull/2638);
+current regression suite passes the absolute-path cases
 **Found:** 2026-07-25, DevFlow phase 23 planning (`23-VALIDATION.md`, `23-PATTERNS.md`)
 **RECURRED:** 2026-08-02, DevFlow phase 30 planning (`30-VALIDATION.md`) — same call shape,
 confirmed and root-caused this time instead of just observed. See "Root cause" below.
@@ -466,7 +485,10 @@ After any `query commit` call whose `--files` argument could be absolute, check
 
 ## 9. `state.planned-phase` silently rewrites unrelated frontmatter via a body→frontmatter resync that has no preserve-guard for `status` or `last_activity_desc`
 
-**Status:** READY — not yet filed
+**Status:** CONFIRMED — current upstream still replaces an accurate `last_activity_desc` with stale
+body prose when both sources carry the same date. The newer-date guard prevents only the unequal-date
+case. Mapping `Ready to execute` to frontmatter `executing` is intentional current behavior, not part
+of the confirmed defect.
 **Found:** 2026-07-31, DevFlow phase 29 planning (`/gsd-plan-phase 29`)
 **RECURRED:** 2026-08-02, DevFlow phase 30 planning (`/gsd-plan-phase 30`) — identical symptom,
 identical stray text (`last_activity_desc` overwritten with the exact same stale string on both
@@ -627,7 +649,8 @@ surface it.
 
 ## 10. `model` and `effort` resolve through different mechanisms at different times, and the docs assert a symmetry that does not exist
 
-**Status:** READY — not yet filed
+**Status:** CONFIRMED — 10a, 10c, and 10d reproduced against current upstream; 10b remains explicit
+in the current resolver/sync source contract. This remains an enhancement bundle, not one defect.
 **Found:** 2026-08-02, DevFlow — routing subagent models/effort so the session model reaches the executor
 **Component:** `gsd-core/bin/lib/model-resolver.cjs`, `install-effort-resolver.cjs`,
 `config-loader.cjs` (`loadConfigResolved`, branch D), `commands.cjs` (`cmdEffortSync` `:579-641`),
@@ -743,10 +766,9 @@ accurate issue log did not catch a repeat defect, because logging is not enforce
 | Same, as a backstop | A `pre-commit` hook that refuses a commit touching `.planning/phases/**` while `HEAD` is on `main`/`develop` |
 | `[ci skip]` wedging a PR | After `/gsd-ship`, assert `gh pr view <n> --json mergeStateStatus` is not `BLOCKED` with an empty rollup; if it is, amend the ship note and force-push with lease |
 
-**Filing status: none of these ten entries has been filed upstream.** That is the single highest-
-leverage action remaining — entries 1, 6, 8, and 9 are now each confirmed reproducible (2/2, 4/4,
-2/2, 2/2 respectively), and entry 10's four sub-findings were each verified by direct test against
-live source, which is the evidence an upstream maintainer needs.
+**Filing status:** entries 1–5 are filed and have open fix PRs #2818–#2814; entry 8 was already
+fixed upstream by #2638. Entries 6, 7, 9, and 10 remain unfiled with the current validation status
+recorded above.
 
 ---
 
