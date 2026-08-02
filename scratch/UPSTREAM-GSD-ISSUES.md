@@ -823,6 +823,122 @@ Operators should treat the statusline percentage as unreliable near completion a
 
 ---
 
+## 12. `state.validate` can never report drift, because its entire disk scan is gated on a field the shipped template never emits
+
+**Status:** READY — not yet filed
+**Found:** 2026-08-02, DevFlow phase 30 wave 3, investigating why `STATE.md` is chronically stale
+**Component:** `gsd-core/bin/lib/state.cjs` (`cmdStateValidate`), `gsd-core/bin/lib/state-document.cjs`
+(`stateExtractField`), `gsd-core/templates/state.md`
+**Severity:** high — a validator that is structurally incapable of failing, on the one command whose
+job is detecting that `STATE.md` has gone stale
+**Reproducibility: confirmed** against gsd-core 1.9.1, and reproducible from the shipped template
+alone with no project state required.
+
+### What happens
+
+`query state.validate` returns a clean bill of health unconditionally:
+
+```
+$ gsd_run query state.validate
+{ "valid": true, "warnings": [], "drift": {} }
+```
+
+On DevFlow this was returned while phase 30 had **5 plans and 5 SUMMARYs on disk** and `STATE.md`
+still read `status: "executing — wave 1 complete (2/5 plans)"`. That is precisely the condition
+`cmdStateValidate` already contains a check for (`state.cjs:2569-2574`, *"All N plans have summaries
+but status is still …"*). The check never ran.
+
+### Root cause
+
+Every drift check in `cmdStateValidate` lives inside one conditional (`state.cjs:2538`):
+
+```js
+const currentPhase = stateExtractField(content, 'Current Phase');
+...
+if (currentPhase && fs.existsSync(phasesDir)) {   // <-- all three checks are inside
+```
+
+`stateExtractField` (`state-document.cjs:206-224`) matches exactly three renderings:
+`**Current Phase:** v`, a line-start `Current Phase: v`, or a `| Current Phase | v |` table row.
+
+**`templates/state.md:32` emits none of them.** The shipped template writes:
+
+```
+Phase: [X] of [Y] ([Phase name])
+```
+
+So `currentPhase` is `null`, the conditional is false, and the function falls straight through to
+`valid = warnings.length === 0` → `true`. The same applies to `Total Plans in Phase`
+(`state.cjs:2534`) and `Last Updated`.
+
+Verified against the template itself rather than against one project's drifted file — extracting the
+fenced `markdown` block from `templates/state.md` and running the real `stateExtractField` over it:
+
+```
+Current Phase          NULL  <-- validate would skip
+Total Plans in Phase   NULL  <-- validate would skip
+Last Updated           NULL  <-- validate would skip
+Phase                  "[X] of [Y] ([Phase name])"     <-- negative control: extractor works
+Status                 "planning"
+```
+
+`Phase` and `Status` resolving prove the extractor is functioning; `Current Phase` returning `NULL`
+on a pristine, never-edited template output is the defect. **This is not project drift — a brand-new
+GSD project has an inert validator from its first commit.**
+
+Note `Status` succeeds only incidentally: it is a single word, the plain pattern carries the `i`
+flag, and frontmatter precedes the body — so it returns the *frontmatter* `status:` value, never the
+body's `Status:` line. Any field name containing a space fails.
+
+### Why this is worse than the check simply being absent
+
+`valid: true` is indistinguishable from "I checked and found nothing." The command reports the
+strongest possible result in the exact case where it did no work at all — an absent field reading as
+a clean bill of health. Callers that route on it (`references/execute-phase-quota-recovery.md` routes
+safe-resume decisions through state verification) cannot tell the two apart.
+
+### Suggested fixes (any one closes it)
+
+1. **Read the field the template writes.** `stateExtractField(content, 'Phase')`, parsing the
+   `[X] of [Y]` shape — smallest change, no template migration.
+2. **Prefer frontmatter.** `current_phase` already exists in frontmatter as a machine field;
+   `stateExtractField` only ever looks at body renderings. Reading frontmatter first would make all
+   three lookups robust and is consistent with how the rest of `state.*` mutates state.
+3. **Fail loud on an unresolvable anchor.** If `currentPhase` is null, return `valid: false` with an
+   explicit `warnings: ["cannot locate current phase in STATE.md"]` rather than `valid: true`. A
+   validator that cannot find its subject must not report success.
+
+### Related, independent finding — a documented recovery verb that does not exist
+
+`references/execute-phase-quota-recovery.md:4` routes quota/interrupt recovery to
+`state.verify-against-disk`:
+
+> commits exist, route to safe-resume (`state.verify-against-disk`) instead of an immediate …
+
+That subcommand is not implemented. The router rejects it (exit 1):
+
+```
+Error: Unknown state subcommand: "verify-against-disk". Available: load, complete-phase, json, get,
+update, patch, begin-phase, advance-plan, record-metric, update-progress, add-decision, add-blocker,
+resolve-blocker, record-session, signal-waiting, signal-resume, planned-phase, validate, sync, prune,
+rebuild, milestone-switch, add-roadmap-evolution
+```
+
+So the documented recovery path for the highest-stakes situation — resuming after a quota kill with
+production commits already on disk — cannot execute. Worth filing as its own issue; either implement
+it, or point the reference at `state.validate` (once entry 12's fix makes that meaningful) or
+`state.rebuild --dry-run`.
+
+### Local workaround
+
+DevFlow adds a `post-commit` hook that detects a `*-SUMMARY.md` landing and warns that `STATE.md`'s
+authored prose is now stale, writing a marker under the gitignored `.devflow/`. It deliberately does
+**not** mutate tracked files: plans in this repository carry scope fences asserting
+`git diff --name-only` lists only their own files, and a hook that dirties `STATE.md` mid-phase would
+break them. The hook is a local signal, not a fix — the validator remains inert.
+
+---
+
 ## Preventing recurrence — the meta-finding (2026-07-31)
 
 Two entries in this file (**1** and **6**) recurred in phase 28, three days after being written up
