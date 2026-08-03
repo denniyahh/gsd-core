@@ -11,8 +11,17 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const yaml = require('js-yaml');
 const { runGsdTools, createTempDir, createTempProject, cleanup } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
+
+function parseRawYamlFrontmatter(content) {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  assert.ok(match, 'STATE.md must have a closed leading YAML frontmatter block');
+  const parsed = yaml.load(match[1], { schema: yaml.JSON_SCHEMA });
+  assert.ok(parsed && typeof parsed === 'object' && !Array.isArray(parsed), 'frontmatter must parse as a YAML mapping');
+  return parsed;
+}
 
 function writePassedVerification(tmpDir, phaseDirName, paddedPhase) {
   fs.writeFileSync(
@@ -4559,6 +4568,114 @@ describe('regressions: table-format STATE.md (#1162) — updateCurrentPositionFi
       !written.includes('| Last Activity | 2026-01-01 |'),
       'Bare-date Last Activity was NOT updated in table branch.\nContent:\n' + written,
     );
+  });
+});
+
+describe('state planned-phase activity frontmatter integrity', () => {
+  let tmpDir;
+  let statePath;
+
+  const commandEnv = {
+    GSD_TEST_MODE: '1',
+    GSD_NOW_MS: String(Date.parse('2020-09-10T12:00:00.000Z')),
+    TZ: 'UTC',
+  };
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-planned-phase-activity-');
+    statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-test-phase');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    for (const plan of ['01', '02', '03']) {
+      fs.writeFileSync(path.join(phaseDir, `01-${plan}-PLAN.md`), `# Plan ${plan}\n`);
+    }
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function buildState({ frontmatterDate, frontmatterDescription, bodyActivity, includeBodyDescription }) {
+    return [
+      '---',
+      'gsd_state_version: 1.0',
+      'status: planning',
+      `last_activity: ${frontmatterDate}`,
+      `last_activity_desc: ${frontmatterDescription}`,
+      'progress:',
+      '  total_phases: 1',
+      '  completed_phases: 0',
+      '  total_plans: 0',
+      '  completed_plans: 0',
+      '  percent: 0',
+      '---',
+      '',
+      '# Project State',
+      '',
+      '## Configuration',
+      '',
+      'Status: Ready to plan',
+      'Total Plans in Phase: 0',
+      `Last Activity: ${bodyActivity}`,
+      ...(includeBodyDescription ? [`Last Activity Description: ${frontmatterDescription}`] : []),
+      '',
+      '## Current Position',
+      '',
+      'Phase: 1',
+      'Plan: Not started',
+      'Status: Ready to plan',
+      `Last activity: ${bodyActivity}`,
+      '',
+    ].join('\n');
+  }
+
+  test('preserves authoritative activity frontmatter when same-date body prose has a different description', () => {
+    fs.writeFileSync(statePath, buildState({
+      frontmatterDate: '2020-09-10',
+      frontmatterDescription: 'authoritative description',
+      bodyActivity: '2020-09-10 — stale description',
+      includeBodyDescription: false,
+    }));
+
+    const result = runGsdTools(
+      ['state', 'planned-phase', '--phase', '1', '--plans', '3'],
+      tmpDir,
+      commandEnv,
+    );
+
+    assert.ok(result.success, `planned-phase failed: ${result.error || result.output}`);
+    const written = fs.readFileSync(statePath, 'utf-8');
+    const parsed = parseRawYamlFrontmatter(written);
+    assert.equal(parsed.last_activity, '2020-09-10');
+    assert.equal(parsed.last_activity_desc, 'authoritative description');
+    assert.equal(parsed.status, 'executing');
+    assert.equal(parsed.progress.total_plans, 3);
+    assert.match(written, /^Total Plans in Phase: 3$/m);
+
+    const currentPosition = written.match(/## Current Position\r?\n([\s\S]*?)(?=\r?\n##|$)/);
+    assert.ok(currentPosition, 'final STATE.md must retain the Current Position section');
+    assert.match(currentPosition[1], /^Status: Ready to execute$/m);
+  });
+
+  test('writes normal planned-phase activity when body activity is non-conflicting', () => {
+    fs.writeFileSync(statePath, buildState({
+      frontmatterDate: '2020-09-09',
+      frontmatterDescription: 'previous description',
+      bodyActivity: '2020-09-09',
+      includeBodyDescription: true,
+    }));
+
+    const result = runGsdTools(
+      ['state', 'planned-phase', '--phase', '1', '--plans', '3'],
+      tmpDir,
+      commandEnv,
+    );
+
+    assert.ok(result.success, `planned-phase failed: ${result.error || result.output}`);
+    const parsed = parseRawYamlFrontmatter(fs.readFileSync(statePath, 'utf-8'));
+    assert.equal(parsed.last_activity, '2020-09-10');
+    assert.equal(parsed.last_activity_desc, 'Phase 1 planning complete — 3 plans ready');
+    assert.equal(parsed.progress.total_plans, 3);
   });
 });
 
