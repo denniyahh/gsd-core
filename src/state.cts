@@ -2671,12 +2671,38 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number, planCou
     sourcePath: statePath,
   };
 
+  const rmwOptions: ReadModifyWriteOptions = {
+    resync: false,
+    deriveProgressKeys: true,
+  };
   let updated: string[] = [];
   readModifyWriteStateMd(statePath, (content) => {
+    const existingFm = extractFrontmatter(content, statePath) as Record<string, unknown>;
+    const body = stripFrontmatter(content);
+    const rawLastActivity = stateExtractField(body, 'Last Activity') ?? stateExtractField(body, 'Last activity');
+    const proseLastActivity = parseProseLastActivityField(rawLastActivity);
+    const bodyActivityDate = proseLastActivity.date ?? rawLastActivity;
+    const bodyActivityDescription = proseLastActivity.description;
+    const frontmatterActivityDate = existingFm['last_activity'];
+    const frontmatterActivityDescription = existingFm['last_activity_desc'];
+
+    if (
+      typeof frontmatterActivityDate === 'string' && frontmatterActivityDate.trim().length > 0 &&
+      typeof frontmatterActivityDescription === 'string' && frontmatterActivityDescription.trim().length > 0 &&
+      bodyActivityDate === frontmatterActivityDate &&
+      typeof bodyActivityDescription === 'string' && bodyActivityDescription.trim().length > 0 &&
+      bodyActivityDescription !== frontmatterActivityDescription
+    ) {
+      rmwOptions.authoritativeFm = {
+        last_activity: frontmatterActivityDate,
+        last_activity_desc: frontmatterActivityDescription,
+      };
+    }
+
     const result = transitionCore(content, intent, deps);
     updated = result.updated;
     return result.content;
-  }, cwd, { resync: false, deriveProgressKeys: true });
+  }, cwd, rmwOptions);
 
   const result = updated.length === 0
     ? { updated, phase: phaseNumber, plan_count: planCount, warning: 'STATE.md Current Position has no recognized labels — transition was a no-op. Verify STATE.md uses the canonical labeled format (Status:, Total Plans in Phase:, etc.).' }
