@@ -481,6 +481,22 @@ After any `query commit` call whose `--files` argument could be absolute, check
 `git status --porcelain <path>` — if the file still shows as untracked/modified, fall back to
 `git add <path> && git commit -m "<msg>"` directly.
 
+**RECURRED 2026-08-03, DevFlow phase 30 close** — different trigger, same underlying gap.
+`--files ".planning/ROADMAP.md .planning/STATE.md"` (two relative paths joined into ONE shell-quoted
+string, a caller error on my part) produced `{"committed": false, "hash": null, "reason":
+"nothing_to_commit"}` on exit 0, with both files genuinely dirty. `gsd-tools.cjs`'s CLI arg parser
+(`routeCommit`) takes every token after `--files` as one file each
+(`args.slice(filesIndex + 1).filter(a => !a.startsWith('--'))`), so the single space-containing
+string became one bogus "path" with a literal space in it. `commands.cjs`'s current `cmdCommit`
+(`:805-810`) confirms suggestion #1 above is now applied (`path.resolve`, not the old `path.join`
+double-join) — but **suggestion #2 (fail loud) was never implemented**: the `existsSync` check at
+`:805` still just `continue`s silently for any `explicitFiles` entry that doesn't resolve, with no
+warning naming the path it checked. That is the same code path this entry's absolute-path case hit;
+this recurrence is independent confirmation that the still-open half of the original fix (fail loud
+instead of silent-skip) remains the right thing to land — it would have caught both trigger shapes.
+Workaround unchanged: diff `git status --porcelain` after every `query commit`, not just the ones
+with absolute-looking paths.
+
 ---
 
 ## 9. `state.planned-phase` silently rewrites unrelated frontmatter via a body→frontmatter resync that has no preserve-guard for `status` or `last_activity_desc`
@@ -537,6 +553,21 @@ produced `last_activity_desc: "Phase 28 execution started"` in frontmatter. Plan
 both calls carried a different `phaseNumber`/`planCount`. This is the strongest evidence that the
 value is not being freshly derived from the current call's intent at all — it's a stale value found
 somewhere else in the document and copied forward unchanged, twice.
+
+**RECURRED again 2026-08-03, via a DIFFERENT verb — `phase.complete`, not `state.planned-phase`.**
+Same mechanism, wider blast radius. Closing phase 30 (`gsd_run query phase.complete "30"`, correctly
+reporting `next_phase: null`, `is_last_phase: true` — the ROADMAP.md side of the call was fine) also
+rewrote `STATE.md`'s frontmatter: `status` and `stopped_at` — both hand-authored minutes earlier
+with an accurate account of the phase's closing state — were replaced with `status: completed` and
+`stopped_at: Phase 28 context gathered`, a stale fragment from an unrelated, much earlier phase.
+`## Current Position`'s body also lost its plan count (`Plan: 5 of 5` → `Plan: Not started`, while
+all 5 plans had in fact executed). The `progress:` frontmatter block was ALSO silently overwritten —
+via the same `state.update-progress` codepath already confirmed broken in entry 11's investigation —
+discarding an explanatory comment that had flagged those exact five numbers as untrustworthy two
+days earlier. This confirms the guard-list gap generalizes across call sites: whatever
+`readModifyWriteStateMd` wraps is exposed to the same missing preserve-guards, not just
+`state.planned-phase`. Recovered by `git checkout -- STATE.md` (uncommitted at the time) and
+hand-correcting the same fields, same workaround as below.
 
 ### Root cause — a two-part mechanism, both parts confirmed against live source and live document state
 
