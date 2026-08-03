@@ -970,6 +970,244 @@ break them. The hook is a local signal, not a fix — the validator remains iner
 
 ---
 
+## 13. `phase.add` inserts the new phase at the file's last `---`, which on a long roadmap is nowhere near the phase list
+
+**Status:** READY — not yet filed
+**Found:** 2026-08-03, DevFlow phase 31 creation (`/gsd:phase`)
+**Component:** `gsd-core/src/phase.cts`, `cmdPhaseAdd` (line 882) and `cmdPhaseAddBatch` (line 970)
+**Severity:** medium — silently files the new phase inside unrelated (often historical) prose. No
+data loss, but the roadmap is wrong until someone notices and moves it by hand.
+**Reproducibility: deterministic.** A pure function of where the last `---` sits in the file.
+
+### What happens
+
+`phase.add` computes the new phase number correctly, creates the directory correctly, then
+inserts the roadmap entry here:
+
+```js
+const lastSeparator = rawContent.lastIndexOf('\n---');
+if (lastSeparator > 0) {
+  updatedContent = rawContent.slice(0, lastSeparator) + phaseEntry + rawContent.slice(lastSeparator);
+} else {
+  updatedContent = rawContent + phaseEntry;
+}
+```
+
+Two things go wrong together:
+
+1. **It scans `rawContent` — the whole file — not the milestone-scoped `content`.** Every other
+   part of the same function is milestone-aware (`extractCurrentMilestone` in the batch variant,
+   the sentinel-999 filter, the on-disk directory scan). The insertion point alone is not.
+2. **`---` is a horizontal rule, not a phase-list terminator.** Any roadmap that keeps history,
+   backlog, appendices, or operator-decision blocks after the active phase list has many of
+   them, and the *last* one is by definition in the trailing material.
+
+The result is that the new phase is inserted before the last horizontal rule in the document,
+which on a roadmap of any age is deep inside archived content.
+
+### Reproduction (observed, DevFlow `.planning/ROADMAP.md`)
+
+- File: 3294 lines. Active phase list ends at line 2858; phase 30's entry is the last live one.
+- Last `^---` in the file: **line 3236** — 58 lines from EOF, inside a historical
+  `### Phase 29 (original scope): …` section, immediately before a `#### Operator decisions`
+  subsection belonging to that archived phase.
+- `phase.add "Claude Adapter Launch Path…"` → correct number (31), correct directory, and the
+  entry written at line 3236 — 378 lines below the phase list, under a *different* phase's
+  heading, in the middle of that phase's prose.
+
+A reader of the roadmap now sees phase 31 documented as part of archived phase 29.
+
+### Why the number being right makes it worse
+
+The number/slug/directory logic is careful and well-commented (it collects from headers, bullets,
+AND on-disk dirs specifically to avoid the #1229 collision). That care means the operator has
+every reason to trust the output — the JSON result it prints is entirely correct, and says
+nothing about placement. Nothing surfaces the misfiling; only reading the diff catches it.
+
+### Suggested fixes (any one is sufficient)
+
+1. **Anchor to the phase list, not to `---`.** Insert after the end of the last `### Phase N:`
+   section within the current milestone — the same section-walk `roadmap.analyze` already
+   implements (`nextHeader` regex in `cmdRoadmapAnalyze`).
+2. **Scope the existing heuristic to the milestone window.** Run `lastIndexOf('\n---')` over
+   `extractCurrentMilestone(rawContent, cwd)` and map the offset back, so it can never reach
+   trailing archive material.
+3. **Minimum viable:** return the byte offset / line number of the insertion in the result JSON,
+   so callers and workflows can verify placement instead of assuming it.
+
+Fix `cmdPhaseAddBatch` (line 970) at the same time — it carries the identical expression.
+
+### Secondary, minor — slug truncation cuts mid-word
+
+The same call produced directory slug
+`31-claude-adapter-launch-path-pipe-owning-monitor-999-64-arc-cl` — a hard cut at exactly 60
+characters, mid-word (`arc-cl` from "arc close"). Harmless (`find-phase 31` resolves it), but
+truncating on a word boundary would cost nothing and reads far better in `ls`.
+
+### Local workaround
+
+Move the entry by hand after every `phase.add`, and diff against a pre-call copy of ROADMAP.md
+to confirm nothing else shifted. Verify with `grep -c '^### Phase N:'` (expect 1) and a
+removed-line count of 0 against the backup.
+
+---
+
+## 15. Route 0's incomplete-phase predicate counts superseded plans, so fixing issue 14 will immediately start misrouting
+
+**Status:** READY — not yet filed
+**Found:** 2026-08-03, DevFlow, running `/gsd:progress --next` twice in one session
+**Component:** `gsd-core/workflows/next.md` step `resume_incomplete_phase` (predicate at line 98,
+loop at line 121, success criterion at line 341)
+**Severity:** medium — currently **latent**, and dormant *only* because issue 14 masks it. Fixing
+14 without fixing this converts a silent no-op into a confident wrong answer, which is worse.
+
+### What happens
+
+Route 0 is the hard invariant that catches a phase left mid-execution when `current_phase` has
+moved past it. It scans phases lowest-to-highest and stops at the first where
+`plans.length > summaries.length` (next.md:98, restated as a success criterion at :341), then
+routes to `/gsd-execute-phase <that phase>`.
+
+The predicate has no notion of a plan that is **deliberately** unsummarised. GSD's own plan
+frontmatter supports `status: superseded` / `superseded_by:`, and `/gsd-plan-phase` writes it —
+but Route 0 does not read it.
+
+### Concrete instance on DevFlow
+
+Phase 25 holds 19 PLAN.md and 18 SUMMARY.md. The gap is `25-10-PLAN.md`, whose frontmatter reads:
+
+```yaml
+status: superseded
+superseded_by: "25-13"
+```
+
+ROADMAP.md marks it `[~] HALTED at Task 1 Step E; SUPERSEDED by 25-13`, and the phase entry
+records the disposition in prose: 25-10 was superseded rather than re-run because re-running it
+unchanged would have produced evidence about tests that were no longer the risk.
+
+Phase 25 is closed. But it is the *lowest-numbered* phase matching the predicate, so a working
+Route 0 scan stops there and routes `/gsd-execute-phase 25` — re-executing a closed phase, and
+never reaching Phase 31, the phase that genuinely needed executing.
+
+### Why it has not bitten yet
+
+Issue 14. `roadmap.analyze` returns an empty `phases[]` on this repo, so the `for` loop at
+next.md:121 never iterates, `INCOMPLETE_PHASE` stays empty, and the workflow falls through to
+`determine_next_action`, which routes on `current_phase` and happens to give the right answer.
+
+Both bugs were observed in the same session: the vacuous scan was caught by enumerating phases
+from the filesystem as a second, independent count — a single count can never look wrong, two
+disagreeing counts always do. That second count is what surfaced Phase 25.
+
+**This is the dangerous shape:** issue 14 is filed and will be fixed. The moment it is, Route 0
+starts iterating for real and immediately misroutes on this repo. The fix for 14 should not ship
+without this one.
+
+### Suggested fix
+
+Exclude plans whose frontmatter carries `status: superseded` (or a non-empty `superseded_by:`)
+from the `plans` count in the predicate — or, better, have `find-phase` report
+`plans_awaiting_summary` alongside `plans`, so every consumer inherits the exclusion rather than
+each re-deriving it. `determine_next_action`'s Route 4 uses the same predicate and has the same
+hole; the success criterion at next.md:341 explicitly ties the two together, so they should be
+fixed as one change.
+
+### Negative control
+
+The claim "Phase 25 is a false positive, not real incomplete work" was checked against a phase
+where the same predicate fires legitimately: Phase 31, 5 plans / 0 summaries, no `superseded`
+frontmatter on any of them, genuinely unexecuted. The proposed exclusion leaves Phase 31 flagged
+and drops Phase 25 — the two cases separate cleanly, which is what makes the exclusion safe
+rather than merely quieting.
+
+---
+
+## 14. `roadmap.analyze` reports `phase_count: 0` with no error while phase directories exist on disk, silently disarming `/gsd:progress --next`'s resume gate
+
+**Status:** READY — not yet filed
+**Found:** 2026-08-03, DevFlow (pre-existing; confirmed present before and after an unrelated edit)
+**Component:** `gsd-core/src/roadmap.cts` `cmdRoadmapAnalyze` → `roadmap-parser.cts`
+`extractCurrentMilestone` (section-end scan, lines 178-193)
+**Severity:** medium-high — the failure is silent, and what it disables is a safety gate.
+**Note on ownership:** the *trigger* is a consuming repo's document layout (see below), which is
+arguably that repo's to fix. The *silence* is the defect being reported here.
+
+### What happens
+
+`extractCurrentMilestone` resolves the active milestone from `STATE.md`'s `milestone:` field,
+finds its heading, then walks forward for the section end — stopping at the next heading of
+level ≤ the milestone heading that is not a Phase heading and that carries a version/status
+marker (`v\d+\.\d+|✅|📋|🚧`).
+
+If the *next* such heading is a **closed** milestone that happens to sit between the active
+milestone heading and the `### Phase N:` detail sections, the active milestone's window closes
+immediately — over prose only, containing zero phase headings. `cmdRoadmapAnalyze` then returns:
+
+```json
+{"milestones":[{"heading":"v2.3.0 milestone","version":"v2.3.0"}],
+ "phases":[],"phase_count":0,"current_phase":null,"next_phase":null}
+```
+
+A populated `milestones` array beside an empty `phases` array — the milestone was found, so
+nothing reads as failure.
+
+### Reproduction and the controlled diagnosis
+
+DevFlow's `.planning/ROADMAP.md`: `## v2.3.0 milestone (ACTIVE…)` at line 5, `## v2.0.0
+milestone (CLOSED…)` at line 25, all `### Phase N:` sections from line 113 onward. 30 phase
+directories on disk.
+
+- Baseline: `phase_count: 0`.
+- **Negative control** (demote only line 25 `## v2.0.0 milestone` → `###`, so it is no longer a
+  level-≤2 boundary; nothing else changed): `phase_count: 22`, `next_phase: "31"`.
+
+That isolates the boundary heading as the sole cause. A first, sloppier control — demoting every
+non-milestone `##` heading — produced no change and briefly looked like a refutation; it had
+excluded the one heading that mattered. Worth stating because the obvious control here is the
+wrong one.
+
+### Why the silence is the defect
+
+`workflows/next.md` Route 0 ("resume_incomplete_phase") is a **hard invariant**: it scans every
+phase for `plans.length > summaries.length` to catch a session that died mid-execution while
+`current_phase` moved past the unfinished work. It is built on `roadmap.analyze`:
+
+```bash
+ROADMAP_JSON=$(gsd_run query roadmap.analyze)
+for PHASE_NUM in $(echo "$ROADMAP_JSON" | jq -r '.phases[] | (.number // …)'); do
+```
+
+With `phases: []` the loop body never executes. `INCOMPLETE_PHASE` stays empty, which is the
+same value it holds when the scan ran and found nothing — so the workflow proceeds to routing as
+though the invariant had been checked and passed. The workflow's own error branch only fires on
+a non-zero exit or empty output; a well-formed JSON document with an empty array passes straight
+through.
+
+This is the same shape as entry **12** (`state.validate`'s disk scan gated on a field the
+template never emits): a safety check that cannot fail because it cannot run.
+
+### Suggested fixes (any one materially helps; 1+2 close it)
+
+1. **Cross-check against disk.** `cmdRoadmapAnalyze` already reads the phases directory
+   (`_phaseDirNames`). If that list is non-empty and `phases` is empty, emit a
+   `warning`/`scope_suspect` field naming the resolved milestone window. Cheap, and it converts
+   silence into a diagnosable message.
+2. **Let Route 0 distinguish "scanned, clean" from "could not scan."** Have the consumer treat
+   `phase_count: 0 && phaseDirsOnDisk > 0` as scan-failed and take the existing warn-and-fall-
+   through branch rather than the pass branch.
+3. **Optional, larger:** when the milestone window contains no phase headings, fall back to
+   whole-document scan (as `stripShippedMilestones` does when no version resolves) instead of
+   returning an empty set.
+
+### Local workaround
+
+None applied yet. The consuming repo can reorder its roadmap so the active milestone's phase
+detail sections are not separated from it by a closed-milestone heading — but that is a
+several-hundred-line restructure of a 3300-line document, and it does not address the silence
+for anyone else.
+
+---
+
 ## Preventing recurrence — the meta-finding (2026-07-31)
 
 Two entries in this file (**1** and **6**) recurred in phase 28, three days after being written up
@@ -1003,5 +1241,9 @@ both root-caused against live source and both confirmed 2/2 recurring. Updated 2
 10 (model/effort resolve through different mechanisms at different times) — an enhancement request
 rather than a defect report, covering the `~/.gsd/defaults.json` model/effort asymmetry, the
 tier-default loss on partial effort config, the `resolve-execution` effort divergence, and the
-missing `inherit` for effort. Update `Status:` and record the issue link when each entry is filed
-upstream.*
+missing `inherit` for effort. Updated 2026-08-03 during DevFlow phase 31 creation with entries 13
+(`phase.add` inserts at the file's last `---`, filing the new phase inside archived prose) and 14
+(`roadmap.analyze` returns `phase_count: 0` with no error while phase directories exist, silently
+disarming `/gsd:progress --next`'s resume-incomplete-phase invariant). Entry 14 was isolated with a
+negative control after a first, wrongly-constructed control appeared to refute it. Update `Status:`
+and record the issue link when each entry is filed upstream.*
