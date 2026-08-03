@@ -5482,6 +5482,29 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number | null |
         rmwOptions.authoritativeFm = { current_phase_name: curatedName };
       }
     }
+    const existingFm = extractFrontmatter(content, statePath) as Record<string, unknown>;
+    const body = stripFrontmatter(content);
+    const rawLastActivity = stateExtractField(body, 'Last Activity') ?? stateExtractField(body, 'Last activity');
+    const proseLastActivity = parseProseLastActivityField(rawLastActivity);
+    const bodyActivityDate = proseLastActivity.date ?? rawLastActivity;
+    const bodyActivityDescription = proseLastActivity.description;
+    const frontmatterActivityDate = existingFm['last_activity'];
+    const frontmatterActivityDescription = existingFm['last_activity_desc'];
+
+    if (
+      typeof frontmatterActivityDate === 'string' && frontmatterActivityDate.trim().length > 0 &&
+      typeof frontmatterActivityDescription === 'string' && frontmatterActivityDescription.trim().length > 0 &&
+      bodyActivityDate === frontmatterActivityDate &&
+      typeof bodyActivityDescription === 'string' && bodyActivityDescription.trim().length > 0 &&
+      bodyActivityDescription !== frontmatterActivityDescription
+    ) {
+      rmwOptions.authoritativeFm = {
+        ...rmwOptions.authoritativeFm,
+        last_activity: frontmatterActivityDate,
+        last_activity_desc: frontmatterActivityDescription,
+      };
+    }
+
     const result = transitionCore(content, intent, deps);
     precomputedUpdated = result.updated;
     return result.content;
