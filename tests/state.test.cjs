@@ -4595,7 +4595,13 @@ describe('state planned-phase activity frontmatter integrity', () => {
     cleanup(tmpDir);
   });
 
-  function buildState({ frontmatterDate, frontmatterDescription, bodyActivity, includeBodyDescription }) {
+  function buildState({
+    frontmatterDate,
+    frontmatterDescription,
+    bodyActivity,
+    currentPositionActivity = bodyActivity,
+    includeBodyDescription,
+  }) {
     return [
       '---',
       'gsd_state_version: 1.0',
@@ -4624,7 +4630,7 @@ describe('state planned-phase activity frontmatter integrity', () => {
       'Phase: 1',
       'Plan: Not started',
       'Status: Ready to plan',
-      `Last activity: ${bodyActivity}`,
+      `Last activity: ${currentPositionActivity}`,
       '',
     ].join('\n');
   }
@@ -4634,6 +4640,7 @@ describe('state planned-phase activity frontmatter integrity', () => {
       frontmatterDate: '2020-09-10',
       frontmatterDescription: 'authoritative description',
       bodyActivity: '2020-09-10 — stale description',
+      currentPositionActivity: '2020-09-09',
       includeBodyDescription: false,
     }));
 
@@ -4655,6 +4662,7 @@ describe('state planned-phase activity frontmatter integrity', () => {
     const currentPosition = written.match(/## Current Position\r?\n([\s\S]*?)(?=\r?\n##|$)/);
     assert.ok(currentPosition, 'final STATE.md must retain the Current Position section');
     assert.match(currentPosition[1], /^Status: Ready to execute$/m);
+    assert.match(currentPosition[1], /^Last activity: 2020-09-10 — Phase 1 planning complete$/m);
   });
 
   test('writes normal planned-phase activity when body activity is non-conflicting', () => {
