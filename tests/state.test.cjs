@@ -4635,10 +4635,10 @@ describe('state planned-phase activity frontmatter integrity', () => {
     ].join('\n');
   }
 
-  test('preserves authoritative activity frontmatter when same-date body prose has a different description', () => {
+  test('preserves exact authoritative activity frontmatter when same-date body prose has a different description', () => {
     fs.writeFileSync(statePath, buildState({
       frontmatterDate: '2020-09-10',
-      frontmatterDescription: 'authoritative description',
+      frontmatterDescription: '"  authoritative description  "',
       bodyActivity: '2020-09-10 — stale description',
       currentPositionActivity: '2020-09-09',
       includeBodyDescription: false,
@@ -4654,7 +4654,7 @@ describe('state planned-phase activity frontmatter integrity', () => {
     const written = fs.readFileSync(statePath, 'utf-8');
     const parsed = parseRawYamlFrontmatter(written);
     assert.equal(parsed.last_activity, '2020-09-10');
-    assert.equal(parsed.last_activity_desc, 'authoritative description');
+    assert.equal(parsed.last_activity_desc, '  authoritative description  ');
     assert.equal(parsed.status, 'executing');
     assert.equal(parsed.progress.total_plans, 3);
     assert.match(written, /^Total Plans in Phase: 3$/m);
