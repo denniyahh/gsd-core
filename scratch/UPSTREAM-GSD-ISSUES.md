@@ -1251,6 +1251,97 @@ for anyone else.
 
 ---
 
+## 16. `milestone.complete`'s "no phases found → assume unscoped" degrade inherits issue 14's window truncation and converts it into a pass-all filter that archives every phase in the project, not just the milestone's own
+
+**Status:** READY — not yet filed
+**Found:** 2026-08-04, DevFlow, running `/gsd-complete-milestone` for v2.3.0 (phases 30–31 only)
+**Component:** `gsd-core/src/roadmap-parser.cts` `getMilestonePhaseFilter` (pass-all degrade at
+line 715); consumed by `gsd-core/src/milestone.cts` `cmdMilestoneComplete` (phase-collection loop
+at line 605, and the identical scoped-content re-derivation at line 550 used by the
+`noDirectoryPhases` guard)
+**Severity:** high — unlike issue 14 (silent no-op on a read path), this fires on a **write path**
+that moves files on disk.
+
+### What happens
+
+`getMilestonePhaseFilter` finds the milestone's heading correctly (`versionScoped: true`), then
+derives the section's end the same way `extractCurrentMilestone` does for issue 14 — walk forward
+to the next heading of level ≤ the milestone heading that isn't a `Phase` heading and matches
+`v\d+\.\d+|✅|📋|🚧`. On this repo that is `## v2.0.0 milestone (CLOSED …)` at ROADMAP.md:25, so
+the scoped window (lines 5–24) is prose only — zero `### Phase N:` headings, even though the
+milestone's own phase details sit at lines 2716 and 3055, past the truncated boundary.
+
+With `milestonePhaseNums.size === 0`, `getMilestonePhaseFilter` returns a **pass-all** filter
+(line 715–724) rather than an empty one — documented in its own comment as a deliberate
+"safe, non-corrupting (over-inclusive, never under-inclusive) degrade" for the genuine case of a
+freshly-declared milestone that has no phases yet. That comment's premise doesn't hold here: the
+milestone has phases, the scan just didn't reach them. The degrade can't tell "truly empty
+milestone" apart from "window truncated by issue 14," and picks the interpretation that is
+maximally wrong for the truncated case — instead of matching *nothing*, it matches *everything on
+disk*.
+
+`cmdMilestoneComplete` then runs that pass-all filter against **every directory in
+`.planning/phases/`**, not just the milestone's. On this repo: 48 phase directories going back to
+v1.0 (2026-06-16), all counted into `{phases: 48, plans: 144, tasks: 290}`, all fed into the
+accomplishments list, and — because `options.archivePhases` defaults to `true` (#1871) — all 48
+**physically moved** via `archivePhaseDirectories` into `.planning/milestones/v2.3.0-phases/`,
+including phases already covered by prior milestones' own archives (v1.0, v2.0).
+
+### Reproduction and negative control
+
+Reproduced via `gsd_run query milestone.complete "2.3.0" --name "…"` (no `--dry-run`): returned
+`phases: 48` and, on disk, moved all 571 tracked files under `.planning/phases/**` into
+`.planning/milestones/2.3.0-phases/`, wrote `.planning/milestones/2.3.0-ROADMAP.md` as a
+byte-for-byte copy of the *entire* 3603-line ROADMAP.md (not a milestone-scoped excerpt), and
+wrote `.planning/MILESTONES.md` claiming "48 phases completed" for a milestone that is actually 2
+phases. Caught before any commit; reverted with `git checkout -- .planning/phases/
+.planning/STATE.md` plus deleting the three newly-created untracked archive paths — nothing was
+pushed or lost.
+
+**Negative control — ruling out the version-string form as the cause.** Re-ran with `--dry-run`
+passing both `"2.3.0"` (no `v` prefix, what was used the first time) and `"v2.3.0"` (the exact
+string in `STATE.md`'s `milestone:` field): both produced the identical `{phases: 48, plans: 144,
+tasks: 290}`. The version-section regex at roadmap-parser.cts:640 does a substring match against
+heading text, so either form locates `## v2.3.0 milestone (ACTIVE…)` equally — the defect is not
+a caller usage error, it is the window-truncation degrade.
+
+### Why it matters more than issue 14
+
+Issue 14 disarms a safety check silently but changes nothing on disk. This is the same root cause
+reached from the write side: a milestone-close operation that is supposed to be scoped to 2 phases
+instead archives 48, inflates the shipped-milestone record with 46 phases' worth of unrelated
+accomplishments, and moves every historical phase directory out of `.planning/phases/` — which
+would corrupt the working tree of any repo that doesn't happen to catch it via `git status` before
+committing, exactly as issue 14's write-up predicted ("the fix for 14 should not ship without
+[accounting for downstream consumers of the same truncation]").
+
+### Suggested fixes
+
+1. **Fix issue 14 at the source** (`extractCurrentMilestone`'s section-end scan) — this defect
+   disappears as a side effect, since `getMilestonePhaseFilter` calls the same window-truncated
+   logic.
+2. **Independently, don't let "zero phases in window" default to pass-all.** Distinguish "the
+   milestone heading was found and its window is genuinely phase-free" from "the window was
+   truncated before reaching any phase heading" — e.g. by checking whether `hasPhaseHeadings`
+   (already computed at line 629) is true for the *whole document* but false for just the scoped
+   `roadmap` substring, and treating that mismatch as a scan failure (empty filter, or a thrown
+   error) rather than an over-inclusive one. An over-inclusive default is only safe when the
+   contents don't get archived/moved; `cmdMilestoneComplete` moves them.
+3. **`cmdMilestoneComplete` specifically:** refuse to proceed with `archivePhases !== false` when
+   `!isDirInMilestone.versionScoped || isDirInMilestone.phaseCount === 0` matched *more*
+   directories than exist in the milestone's own `### Phase N:` list scanned from the *whole*
+   document — a disk-vs-document cross-check in the same spirit as issue 14's suggested fix 1.
+
+### Local workaround
+
+None applied — the milestone was archived by hand instead (extract only phases 30/31 into the
+archive files, write a correctly-scoped `MILESTONES.md` entry, skip `milestone.complete`
+entirely). Reordering the ROADMAP so the active milestone isn't followed by a closed-milestone
+heading before its phase details would fix this the same way it would fix issue 14, at the same
+several-hundred-line restructure cost.
+
+---
+
 ## Preventing recurrence — the meta-finding (2026-07-31)
 
 Two entries in this file (**1** and **6**) recurred in phase 28, three days after being written up
@@ -1288,5 +1379,8 @@ missing `inherit` for effort. Updated 2026-08-03 during DevFlow phase 31 creatio
 (`phase.add` inserts at the file's last `---`, filing the new phase inside archived prose) and 14
 (`roadmap.analyze` returns `phase_count: 0` with no error while phase directories exist, silently
 disarming `/gsd:progress --next`'s resume-incomplete-phase invariant). Entry 14 was isolated with a
-negative control after a first, wrongly-constructed control appeared to refute it. Update `Status:`
-and record the issue link when each entry is filed upstream.*
+negative control after a first, wrongly-constructed control appeared to refute it. Updated
+2026-08-04 during DevFlow's v2.3.0 milestone close with entry 16 (`milestone.complete`'s pass-all
+degrade inherits entry 14's window truncation and archived all 48 project phases instead of the
+milestone's 2 — reproduced live, caught before commit, reverted with no data loss). Update
+`Status:` and record the issue link when each entry is filed upstream.*
