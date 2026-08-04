@@ -7,11 +7,11 @@
 
 ### State Integrity
 
-- [ ] **STATE-01**: A GSD project maintainer can run `state planned-phase` without stale same-date body prose overwriting authoritative `last_activity` or `last_activity_desc` frontmatter.
+- [x] **STATE-01**: A GSD project maintainer can run `state planned-phase` without stale same-date body prose overwriting authoritative `last_activity` or `last_activity_desc` frontmatter.
 
 ### Verification
 
-- [ ] **QUALITY-01**: A contributor can verify STATE-01 through a focused command-level regression that asserts the final `STATE.md` frontmatter and preserves intentional planned-phase status, body, and plan-count behavior.
+- [x] **QUALITY-01**: A contributor can verify STATE-01 through a focused command-level regression that asserts the final `STATE.md` frontmatter and preserves intentional planned-phase status, body, and plan-count behavior.
 
 ## v2 Requirements
 
@@ -35,10 +35,11 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| STATE-01 | Phase 1 | Pending |
-| QUALITY-01 | Phase 1 | Pending |
+| STATE-01 | Phase 1 | Complete |
+| QUALITY-01 | Phase 1 | Complete |
 
 **Coverage:**
+
 - v1 requirements: 2 total
 - Mapped to phases: 2
 - Unmapped: 0 ✓
