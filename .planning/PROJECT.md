@@ -20,7 +20,8 @@ Every contribution must make GSD more reliable without regressing its supported 
 
 ### Active
 
-None for the completed v1.0 milestone.
+- STATE-02: `state.validate` detects on-disk drift when `STATE.md` uses the shipped frontmatter and canonical `Phase:` body field.
+- QUALITY-02: The state-diagnostics repair has a reproducing regression test and focused verification.
 
 ### Out of Scope
 
@@ -33,16 +34,16 @@ None for the completed v1.0 milestone.
 
 The codebase is an npm package built primarily from TypeScript/CommonJS runtime modules and declarative Markdown workflows. It installs and projects artifacts for multiple coding-agent runtimes, so source, generated artifacts, and runtime-specific behavior must remain aligned.
 
-`scratch/UPSTREAM-GSD-ISSUES.md` records evidence gathered while dogfooding. The first milestone completed confirmed item 9 (planned-phase frontmatter synchronization); item 10 (model/effort configuration consistency) remains documented research for a later milestone. The codebase map under `.planning/codebase/` records the current architecture, stack, conventions, tests, and risks.
+`scratch/UPSTREAM-GSD-ISSUES.md` records evidence gathered while dogfooding. The first milestone completed confirmed item 9 (planned-phase frontmatter synchronization). The current milestone narrows to item 12: restore `state.validate` disk-drift detection for the shipped state-document shape. Item 11 and the separately missing `state.verify-against-disk` command remain outside this slice. The codebase map under `.planning/codebase/` records the current architecture, stack, conventions, tests, and risks.
 
 ## Current State
 
-v1.0 shipped on 2026-08-04. It delivered the planned-phase state-integrity repair and its focused command-level regression. The completed phase and its verification evidence are archived under `.planning/milestones/v1.0-phases/`.
+v1.1 State Diagnostics is being defined. It will repair the `state.validate` anchor mismatch and add focused regression coverage without expanding into broader state-workflow changes.
 
 ## Next Milestone Goals
 
-- Define the next contribution slice and refresh its requirements before creating a new roadmap.
-- Revisit the documented model/effort configuration consistency work as a coherent, separately planned milestone.
+- Define the focused requirements and roadmap for state-drift diagnostics.
+- Preserve item 11 and broader milestone-safety work as candidates for later slices.
 
 ## Constraints
 
@@ -59,6 +60,7 @@ v1.0 shipped on 2026-08-04. It delivered the planned-phase state-integrity repai
 |----------|-----------|---------|
 | Broad project objective: contribute upstream bug fixes and features | The project is ongoing; any one issue ledger is only a milestone input | — Pending |
 | First milestone covers ledger item 9 only | The user chose a narrow state-integrity slice with mandatory regression coverage; item 10 is deferred intact to v2 | ✓ Good |
+| v1.1 covers ledger item 12 only | The user chose a small state-diagnostics milestone; item 11 and a missing disk-verification command stay separate | — Pending |
 | Codebase map before initialization | Brownfield architecture and risk context should inform requirements and roadmap | ✓ Good |
 | Track planning artifacts in this fork | The project owner explicitly wants planning context versioned with contribution work | ✓ Good |
 | Hold DevFlow use | The project owner considers it not mature enough for this workflow | — Pending |
@@ -81,4 +83,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-08-04 after v1.0 milestone completion*
+*Last updated: 2026-08-04 for v1.1 State Diagnostics kickoff*
