@@ -676,6 +676,49 @@ call. Both recorded occurrences were caught and fixed this way with no data loss
 pre-corruption value), but it must be checked every time; the tool's own report cannot be trusted to
 surface it.
 
+### Addendum, 2026-08-04: a second, architecturally distinct symptom shares this root — a
+### preserve-guard on named fields will NOT fix it
+
+**Found:** 2026-08-03, DevFlow phase 31 (plan, execute, and close stages — three separate verb
+calls in one phase, not a recurrence of the same call).
+**New component detail:** `buildStateFrontmatter` (`src/state.cts:1577-1815`, current checkout)
+does not read or carry forward the *previous* frontmatter block at all. It reconstructs the entire
+`Record<string, unknown>` from scratch by extracting a fixed set of named fields out of the Markdown
+**body** (`Current Phase`, `Status`, `Progress`, `Last Activity`, …) via `stateExtractField`. Verified
+directly against this checkout: no code path in the function references prior frontmatter comments,
+unknown keys, or key order — there is nothing there *to* preserve, because the model it builds from
+never contained them.
+
+**Consequence for this project's STATE.md:** DevFlow's `progress:` block carries a hand-authored
+YAML comment above the five progress fields, explaining that those fields are known-stale and why
+(see DevFlow's own `.planning/STATE.md` history / `UPSTREAM-GSD-ISSUES.md` entries 9 and 11 as cited
+from that comment). **Every call through `syncStateFrontmatter` deletes that comment**, silently,
+because `buildStateFrontmatter`'s rebuilt object has no representation for it. Reproduced 3/3 in one
+DevFlow phase across three different call sites that all route through the same function:
+`state.planned-phase` (this entry's original subject), `state.begin-phase`
+(`execute-phase.md`'s `validate_phase` step), and `phase.complete`. None of the three reported the
+deletion in their `updated`/return payload — same under-reporting this entry already documents for
+`status`/`last_activity_desc`, now confirmed for arbitrary non-modeled content generally.
+
+**Why this is a different fix from what §"Suggested fix" above proposes, not a duplicate of it.**
+Adding `status`/`last_activity_desc` to a preserve-guard list keeps specific *field values* correct.
+It does nothing for content that was never a field in the first place — a YAML comment, an unknown
+key a human added, non-standard formatting. The rebuild-from-body-prose architecture is the shared
+root of both symptoms, but the fix shapes diverge:
+
+1. **Field-level preserve-guard** (this entry's existing proposal) — cheap, but structurally cannot
+   cover comments/unknown-keys, because there is no field to guard.
+2. **Stop rebuilding; edit the existing frontmatter block in place**, or round-trip through a
+   comment-preserving YAML parser or a diff/patch on the raw frontmatter text instead of
+   parse-to-model-then-reserialize. Bigger change, but it is the only shape that fixes both symptoms
+   at once, because it removes the lossy round-trip itself rather than patching its output.
+
+**Local workaround, in addition to the one above:** if a project's STATE.md carries any
+hand-authored comment or non-standard content in frontmatter, expect it to be silently deleted by
+*any* verb that writes STATE.md, not only `state.planned-phase`. Diff the full frontmatter block —
+not just the fields you expect to have changed — after every state-writing verb, and restore
+comments in the same commit as any legitimate change from that call.
+
 ---
 
 ## 10. `model` and `effort` resolve through different mechanisms at different times, and the docs assert a symmetry that does not exist
