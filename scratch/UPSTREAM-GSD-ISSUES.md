@@ -900,7 +900,7 @@ Operators should treat the statusline percentage as unreliable near completion a
 
 ## 12. `state.validate` can never report drift, because its entire disk scan is gated on a field the shipped template never emits
 
-**Status:** READY — not yet filed
+**Status:** IN PROGRESS — selected for v1.1 State Diagnostics; not yet filed
 **Found:** 2026-08-02, DevFlow phase 30 wave 3, investigating why `STATE.md` is chronically stale
 **Component:** `gsd-core/bin/lib/state.cjs` (`cmdStateValidate`), `gsd-core/bin/lib/state-document.cjs`
 (`stateExtractField`), `gsd-core/templates/state.md`
