@@ -1342,6 +1342,86 @@ several-hundred-line restructure cost.
 
 ---
 
+## 17. `query progress` (`cmdProgressRender`) lists every `999.*` backlog directory as a phase of the current milestone — it has neither the sentinel filter nor the milestone-window scoping its sibling `roadmap.analyze` has
+
+**Status:** READY — not yet filed
+**Found:** 2026-08-04, DevFlow, checking `gsd-tools` health after the v1.0/v2.0.0/v2.3.0
+retroactive milestone archival (prompted by an operator question about whether a related fix was
+complete)
+**Component:** `gsd-core/src/commands.cts` `cmdProgressRender` (lines 1549–1610)
+**Severity:** medium — wrong output today, not yet observed to cause a wrong *action*, but the
+same shape as issues 14/16 (a phase-enumeration path missing a safety filter its sibling has)
+
+### What happens
+
+`cmdProgressRender` implements `query progress` / `/gsd:progress`'s JSON and rendered-table output.
+Unlike `cmdRoadmapAnalyze` (`roadmap.analyze`, `roadmap.cts:303`), it does not call
+`extractCurrentMilestone` and does not apply the sentinel-phase filter
+(`isSentinelPhase`/`major === 999`, `roadmap.cts:339-342`, applied at `roadmap.cts:355`). Instead
+it does an unscoped, unfiltered directory read:
+
+```ts
+const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
+const dirs = entries.filter(e => e.isDirectory()).map(e => e.name).sort(...);
+for (const dir of dirs) {
+  const dm = dir.match(/^(\d+(?:\.\d+)*)-?(.*)/);
+  const phaseNum = dm ? dm[1] : dir;
+  ...
+  phases.push({ number: phaseNum, name: phaseName, plans, summaries, status });
+}
+```
+
+Every directory under `.planning/phases/` — including every `999.N-*` backlog item — matches the
+`phaseNum` regex and is pushed into `phases[]` unconditionally. `getMilestoneInfo(cwd)` is called
+only to *label* the output (`milestone_version`, `milestone_name`); its result is never used to
+scope which directories count as that milestone's phases.
+
+### Concrete instance on DevFlow
+
+Post-archival, `.planning/phases/` holds only 17 `999.*` backlog directories (every numbered phase
+1–31 has been moved to a milestone archive or `superseded/`). `query progress` against this state
+returns `milestone_version: "v2.3.0"` (a *closed* milestone) with `phases: [...]` listing all 17
+backlog items as `status: "Pending"`, `plans: 0`, `summaries: 0` — none of them are phases of any
+milestone, closed or otherwise. `total_plans: 0` / `total_summaries: 0` makes `percent: 0 / 0 →
+0`, so this instance is not numerically dangerous (contrast issue 11's "percent: 100 while plans
+remain unexecuted" — the two failure directions are both reachable from the same missing-filter
+class of defect, just via different phase mixes in `phasesDir`).
+
+### Why this is the same defect class as 14/16, not a new one
+
+Three functions read the same `phasesDir` for overlapping purposes and apply three different
+scoping disciplines:
+
+| Function | Milestone-scoped? | `999.*` filtered? |
+|---|---|---|
+| `cmdRoadmapAnalyze` (`roadmap.analyze`) | yes, via `extractCurrentMilestone` | yes, `isSentinelPhase` |
+| `getMilestonePhaseFilter` (issue 16) | yes, same window logic | yes, `!/^999\b/.test(...)` |
+| `cmdProgressRender` (`query progress`) | **no** | **no** |
+
+The sentinel convention is documented as engine-wide ("Mirrors the engine-wide sentinel
+convention", `roadmap.cts:337`) but is not actually engine-wide — `cmdProgressRender` never
+imports or applies it. This is a missing-filter defect independent of issue 14's window-truncation
+mechanism (it doesn't call `extractCurrentMilestone` at all), but it's the same *shape*: a
+phase-enumeration path that silently drops a safety filter its sibling has.
+
+### Suggested fix
+
+Share one filtering primitive across all three functions (`isSentinelPhase` /
+`getMilestonePhaseFilter`'s exclusion) instead of each re-implementing phase-directory enumeration
+independently — the drift here is exactly what issue 16's fix suggestion 1 argues for, generalized
+to a third call site. Minimally, `cmdProgressRender` should skip any `dir` matching
+`isSentinelPhase(phaseNum)` before pushing it into `phases[]`, and ideally should scope to
+`milestone`'s own phases the way `getMilestonePhaseFilter` does, rather than listing every
+directory in `phasesDir` regardless of which (if any) milestone it belongs to.
+
+### Local workaround
+
+None needed for correctness (DevFlow doesn't act on `query progress`'s `phases[]` list
+programmatically), but the output is actively misleading if read by a human or an agent deciding
+what to work on next. No workaround applied — filed for the record only.
+
+---
+
 ## Preventing recurrence — the meta-finding (2026-07-31)
 
 Two entries in this file (**1** and **6**) recurred in phase 28, three days after being written up
@@ -1382,5 +1462,9 @@ disarming `/gsd:progress --next`'s resume-incomplete-phase invariant). Entry 14 
 negative control after a first, wrongly-constructed control appeared to refute it. Updated
 2026-08-04 during DevFlow's v2.3.0 milestone close with entry 16 (`milestone.complete`'s pass-all
 degrade inherits entry 14's window truncation and archived all 48 project phases instead of the
-milestone's 2 — reproduced live, caught before commit, reverted with no data loss). Update
-`Status:` and record the issue link when each entry is filed upstream.*
+milestone's 2 — reproduced live, caught before commit, reverted with no data loss). Updated
+2026-08-04 (same day, retroactive v1.0/v2.0.0 archival) with entry 17 (`query progress`
+/ `cmdProgressRender` lists every `999.*` backlog directory as a phase, missing both the
+milestone-window scoping and the sentinel filter its siblings `roadmap.analyze` and
+`getMilestonePhaseFilter` both have — root-caused directly against `commands.cts:1549-1610`).
+Update `Status:` and record the issue link when each entry is filed upstream.*
