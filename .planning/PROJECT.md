@@ -15,11 +15,12 @@ Every contribution must make GSD more reliable without regressing its supported 
 - ✓ GSD provides a Node-based CLI and deterministic project-state operations — existing
 - ✓ GSD distributes commands, workflows, skills, agents, and hooks across multiple host runtimes — existing
 - ✓ GSD has focused unit, integration, install, security, QA, and generated-artifact verification suites — existing
+- ✓ STATE-01: Planning a phase preserves authoritative `STATE.md` frontmatter activity metadata when its body contains stale same-date prose — validated in Phase 1.
+- ✓ QUALITY-01: The item-9 fix has a focused reproducing regression test and targeted verification — validated in Phase 1.
 
 ### Active
 
-- [ ] STATE-01: Planning a phase preserves authoritative `STATE.md` frontmatter activity metadata when its body contains stale same-date prose. (Ledger item 9.)
-- [ ] QUALITY-01: The item-9 fix has a focused reproducing regression test and targeted verification before an upstream pull request is opened.
+None for the completed v1.0 milestone.
 
 ### Out of Scope
 
@@ -32,7 +33,7 @@ Every contribution must make GSD more reliable without regressing its supported 
 
 The codebase is an npm package built primarily from TypeScript/CommonJS runtime modules and declarative Markdown workflows. It installs and projects artifacts for multiple coding-agent runtimes, so source, generated artifacts, and runtime-specific behavior must remain aligned.
 
-`scratch/UPSTREAM-GSD-ISSUES.md` records evidence gathered while dogfooding. The first milestone focuses on confirmed item 9 (planned-phase frontmatter synchronization); item 10 (model/effort configuration consistency) remains documented research for a later milestone. The codebase map under `.planning/codebase/` records the current architecture, stack, conventions, tests, and risks.
+`scratch/UPSTREAM-GSD-ISSUES.md` records evidence gathered while dogfooding. The first milestone completed confirmed item 9 (planned-phase frontmatter synchronization); item 10 (model/effort configuration consistency) remains documented research for a later milestone. The codebase map under `.planning/codebase/` records the current architecture, stack, conventions, tests, and risks.
 
 ## Constraints
 
@@ -48,7 +49,7 @@ The codebase is an npm package built primarily from TypeScript/CommonJS runtime 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
 | Broad project objective: contribute upstream bug fixes and features | The project is ongoing; any one issue ledger is only a milestone input | — Pending |
-| First milestone covers ledger item 9 only | The user chose a narrow state-integrity slice with mandatory regression coverage; item 10 is deferred intact to v2 | — Pending |
+| First milestone covers ledger item 9 only | The user chose a narrow state-integrity slice with mandatory regression coverage; item 10 is deferred intact to v2 | ✓ Good |
 | Codebase map before initialization | Brownfield architecture and risk context should inform requirements and roadmap | ✓ Good |
 | Track planning artifacts in this fork | The project owner explicitly wants planning context versioned with contribution work | ✓ Good |
 | Hold DevFlow use | The project owner considers it not mature enough for this workflow | — Pending |
@@ -71,4 +72,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-08-02 after initialization*
+*Last updated: 2026-08-04 after Phase 1 completion*
