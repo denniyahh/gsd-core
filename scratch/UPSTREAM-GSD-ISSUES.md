@@ -501,10 +501,11 @@ with absolute-looking paths.
 
 ## 9. `state.planned-phase` silently rewrites unrelated frontmatter via a body→frontmatter resync that has no preserve-guard for `status` or `last_activity_desc`
 
-**Status:** CONFIRMED — current upstream still replaces an accurate `last_activity_desc` with stale
-body prose when both sources carry the same date. The newer-date guard prevents only the unequal-date
-case. Mapping `Ready to execute` to frontmatter `executing` is intentional current behavior, not part
-of the confirmed defect.
+**Status:** IN PROGRESS — filed upstream as [#3052](https://github.com/open-gsd/gsd-core/issues/3052);
+awaiting maintainer triage and `confirmed-bug` before opening the focused fix PR. Current upstream
+still replaces an accurate `last_activity_desc` with stale body prose when both sources carry the same
+date. The newer-date guard prevents only the unequal-date case. Mapping `Ready to execute` to
+frontmatter `executing` is intentional current behavior, not part of the confirmed defect.
 **Found:** 2026-07-31, DevFlow phase 29 planning (`/gsd-plan-phase 29`)
 **RECURRED:** 2026-08-02, DevFlow phase 30 planning (`/gsd-plan-phase 30`) — identical symptom,
 identical stray text (`last_activity_desc` overwritten with the exact same stale string on both
@@ -1342,6 +1343,177 @@ several-hundred-line restructure cost.
 
 ---
 
+## 17. `query progress` (`cmdProgressRender`) lists every `999.*` backlog directory as a phase of the current milestone — it has neither the sentinel filter nor the milestone-window scoping its sibling `roadmap.analyze` has
+
+**Status:** READY — not yet filed
+**Found:** 2026-08-04, DevFlow, checking `gsd-tools` health after the v1.0/v2.0.0/v2.3.0
+retroactive milestone archival (prompted by an operator question about whether a related fix was
+complete)
+**Component:** `gsd-core/src/commands.cts` `cmdProgressRender` (lines 1549–1610)
+**Severity:** medium — wrong output today, not yet observed to cause a wrong *action*, but the
+same shape as issues 14/16 (a phase-enumeration path missing a safety filter its sibling has)
+
+### What happens
+
+`cmdProgressRender` implements `query progress` / `/gsd:progress`'s JSON and rendered-table output.
+Unlike `cmdRoadmapAnalyze` (`roadmap.analyze`, `roadmap.cts:303`), it does not call
+`extractCurrentMilestone` and does not apply the sentinel-phase filter
+(`isSentinelPhase`/`major === 999`, `roadmap.cts:339-342`, applied at `roadmap.cts:355`). Instead
+it does an unscoped, unfiltered directory read:
+
+```ts
+const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
+const dirs = entries.filter(e => e.isDirectory()).map(e => e.name).sort(...);
+for (const dir of dirs) {
+  const dm = dir.match(/^(\d+(?:\.\d+)*)-?(.*)/);
+  const phaseNum = dm ? dm[1] : dir;
+  ...
+  phases.push({ number: phaseNum, name: phaseName, plans, summaries, status });
+}
+```
+
+Every directory under `.planning/phases/` — including every `999.N-*` backlog item — matches the
+`phaseNum` regex and is pushed into `phases[]` unconditionally. `getMilestoneInfo(cwd)` is called
+only to *label* the output (`milestone_version`, `milestone_name`); its result is never used to
+scope which directories count as that milestone's phases.
+
+### Concrete instance on DevFlow
+
+Post-archival, `.planning/phases/` holds only 17 `999.*` backlog directories (every numbered phase
+1–31 has been moved to a milestone archive or `superseded/`). `query progress` against this state
+returns `milestone_version: "v2.3.0"` (a *closed* milestone) with `phases: [...]` listing all 17
+backlog items as `status: "Pending"`, `plans: 0`, `summaries: 0` — none of them are phases of any
+milestone, closed or otherwise. `total_plans: 0` / `total_summaries: 0` makes `percent: 0 / 0 →
+0`, so this instance is not numerically dangerous (contrast issue 11's "percent: 100 while plans
+remain unexecuted" — the two failure directions are both reachable from the same missing-filter
+class of defect, just via different phase mixes in `phasesDir`).
+
+### Why this is the same defect class as 14/16, not a new one
+
+Three functions read the same `phasesDir` for overlapping purposes and apply three different
+scoping disciplines:
+
+| Function | Milestone-scoped? | `999.*` filtered? |
+|---|---|---|
+| `cmdRoadmapAnalyze` (`roadmap.analyze`) | yes, via `extractCurrentMilestone` | yes, `isSentinelPhase` |
+| `getMilestonePhaseFilter` (issue 16) | yes, same window logic | yes, `!/^999\b/.test(...)` |
+| `cmdProgressRender` (`query progress`) | **no** | **no** |
+
+The sentinel convention is documented as engine-wide ("Mirrors the engine-wide sentinel
+convention", `roadmap.cts:337`) but is not actually engine-wide — `cmdProgressRender` never
+imports or applies it. This is a missing-filter defect independent of issue 14's window-truncation
+mechanism (it doesn't call `extractCurrentMilestone` at all), but it's the same *shape*: a
+phase-enumeration path that silently drops a safety filter its sibling has.
+
+### Suggested fix
+
+Share one filtering primitive across all three functions (`isSentinelPhase` /
+`getMilestonePhaseFilter`'s exclusion) instead of each re-implementing phase-directory enumeration
+independently — the drift here is exactly what issue 16's fix suggestion 1 argues for, generalized
+to a third call site. Minimally, `cmdProgressRender` should skip any `dir` matching
+`isSentinelPhase(phaseNum)` before pushing it into `phases[]`, and ideally should scope to
+`milestone`'s own phases the way `getMilestonePhaseFilter` does, rather than listing every
+directory in `phasesDir` regardless of which (if any) milestone it belongs to.
+
+### Local workaround
+
+None needed for correctness (DevFlow doesn't act on `query progress`'s `phases[]` list
+programmatically), but the output is actively misleading if read by a human or an agent deciding
+what to work on next. No workaround applied — filed for the record only.
+
+---
+
+## 18. `buildPhaseCompletionProjection` requires `planCount > 0` to ever check verification, so a phase with zero plans is permanently reported `phase_complete: false` / `verification_status: "not_required"` even when a real, passing `*-VERIFICATION.md` exists
+
+**Status:** READY — not yet filed
+**Found:** 2026-08-04, DevFlow, closing Phase 32 (`gsd-hygiene` milestone) — a docs-only phase
+whose goal was already satisfied by a prior write, so it deliberately went through
+`/gsd-discuss-phase` and a standalone verification with no `/gsd-plan-phase` / `/gsd-execute-phase`
+step, then `phase.complete` succeeded and `.planning/phases/.../*-VERIFICATION.md` existed with
+`status: passed`
+**Component:** `gsd-core/bin/lib/init.cjs`, `buildPhaseCompletionProjection` (bundled around
+line 122; feeds `init.manager`'s `phases[].phase_complete` / `verification_status`, which
+`/gsd-complete-milestone`'s `verify_readiness` step gates on)
+**Severity:** medium — a false-negative safety gate, same shape as issues 14/16/17 (a completion
+predicate silently wrong for a phase shape gsd-core didn't anticipate), but on a *read* path that
+blocks forward motion rather than a *write* path that corrupts state
+
+### What happens
+
+```js
+function buildPhaseCompletionProjection(cwd, phaseNumber, phaseDir, planCount, summaryCount, slashRuntime) {
+    const implementationComplete = planCount > 0 && summaryCount >= planCount;
+    const verificationStatus = implementationComplete
+        ? readVerificationStatus(phaseFullDir, { runtime: slashRuntime, phaseNumber })
+        : { status: 'not_required', next_action: '', next_command: '' };
+    ...
+    const phaseComplete = implementationComplete && verificationPassed;
+```
+
+`implementationComplete` requires `planCount > 0`. When it's `false`, `readVerificationStatus` is
+never called — `verification_status` is hardcoded to the sentinel `"not_required"` regardless of
+whether a `*-VERIFICATION.md` file exists on disk and regardless of its actual `status:` value.
+`phase_complete` is then `false` unconditionally, because it's `implementationComplete &&
+verificationPassed` and the first operand can never be `true`. There is no code path by which a
+zero-plan phase can ever report `phase_complete: true`, no matter what its VERIFICATION.md says.
+
+### Concrete instance on DevFlow
+
+Phase 32 had `plan_count: 0` by design — its own `CONTEXT.md` decision (D-01) was "verification
+only, no plan needed" because the phase's goal had already been satisfied by an earlier,
+unrelated write (`gsd-roadmapper`'s milestone-creation commit). A `gsd-verifier` subagent was
+spawned directly (bypassing the normal execute-phase→verify pipeline, using `verify-phase.md`'s
+"Option B: Success Criteria from ROADMAP.md" fallback since there was no PLAN frontmatter to read
+`must_haves` from) and wrote `32-VERIFICATION.md` with `status: passed`, `score: 4/4`.
+`gsd-tools query verification.status <dir>` confirms this directly: `{"status": "passed", ...}`.
+But `gsd-tools query init.manager` reported, for the same phase, at the same commit:
+`"plan_count": 0, "verification_status": "not_required", "phase_complete": false,
+"completion_status": "incomplete"` — flatly contradicting the file that function is supposed to be
+reading. `gsd-tools query phase.complete 32` (a separate code path — it gates on
+`readVerificationStatus` directly, not through `buildPhaseCompletionProjection`) succeeded and
+correctly marked the phase complete in ROADMAP.md/STATE.md/REQUIREMENTS.md — so the *actual*
+completion logic disagrees with the *projection* logic `init.manager` exposes for exactly this
+kind of phase.
+
+### Why it matters
+
+`/gsd-complete-milestone`'s `verify_readiness` step computes `ALL_PHASES_VERIFIED` from
+`init.manager`'s `.phases[] | (.phase_complete == true and .verification_status == "passed")`.
+A milestone whose only phase is a legitimately-complete, legitimately-verified, zero-plan phase
+would fail this check and force the operator into the "override / re-verify / abort" branch for a
+phase that is not actually unverified — the workflow's own safety gate misfires in the direction
+of false alarm, on a phase shape (verify-only, no code) that this project's own conventions
+already produce deliberately (Phase 22's SUMMARY/VERIFICATION were similarly backfilled after the
+fact, per `PROJECT.md`).
+
+### Suggested fixes
+
+1. **Read verification independently of `implementationComplete`.** Call
+   `readVerificationStatus(phaseFullDir, ...)` unconditionally, and let `phase_complete` be
+   `verificationPassed` alone (or `verificationPassed && (planCount === 0 || summaryCount >=
+   planCount)`, if plan/summary parity should still gate phases that *do* have plans). A
+   `*-VERIFICATION.md` with `status: passed` on disk is stronger evidence of completion than an
+   absence of plan files is evidence of incompleteness.
+2. **Recognize a documented zero-plan phase explicitly**, e.g. a `plans: none-required` or similar
+   marker the verifier/CONTEXT.md can set, so `implementationComplete` has a legitimate `true`
+   path that doesn't require `planCount > 0`.
+
+### Local workaround
+
+Hand-authored a minimal, explicitly-labeled-as-backfilled `{phase}-01-PLAN.md` /
+`{phase}-01-SUMMARY.md` pair after the fact, describing the discussion/verification work that had
+already happened (not fabricated tasks), purely so `planCount > 0` and
+`summaryCount >= planCount` would hold and `readVerificationStatus` would actually run and find
+the real, already-passing report. Required re-committing the VERIFICATION.md file *after* the
+backfilled SUMMARY so `findStaleVerificationSummary`'s commit-time comparison didn't then flag it
+stale (the SUMMARY's mtime/commit-time was, correctly, later than the original VERIFICATION.md
+commit). Operator-approved (2026-08-04) rather than silently applied — this workaround manufactures
+a PLAN/SUMMARY pair the phase's own CONTEXT.md explicitly decided was unnecessary, solely to
+satisfy a tooling assumption, which is exactly the kind of provenance-blurring this project's own
+conventions try to avoid; recorded plainly in both documents' bodies for that reason.
+
+---
+
 ## Preventing recurrence — the meta-finding (2026-07-31)
 
 Two entries in this file (**1** and **6**) recurred in phase 28, three days after being written up
@@ -1362,8 +1534,33 @@ accurate issue log did not catch a repeat defect, because logging is not enforce
 | `[ci skip]` wedging a PR | After `/gsd-ship`, assert `gh pr view <n> --json mergeStateStatus` is not `BLOCKED` with an empty rollup; if it is, amend the ship note and force-push with lease |
 
 **Filing status:** entries 1–5 are filed and have open fix PRs #2818–#2814; entry 8 was already
-fixed upstream by #2638. Entries 6, 7, 9, and 10 remain unfiled with the current validation status
+fixed upstream by #2638. Entry 9 is filed as [#3052](https://github.com/open-gsd/gsd-core/issues/3052)
+and awaits maintainer triage; entries 6, 7, and 10 remain unfiled with the current validation status
 recorded above.
+
+## Contribution Status and Next-Slice Assessment (2026-08-04)
+
+### Phase 01 disposition
+
+Phase 01 addressed entry 9 only: the same-date `state.planned-phase` activity-conflict defect. The
+focused repair and final-artifact regression are complete in the personal planning archive; the
+upstream bug report is [#3052](https://github.com/open-gsd/gsd-core/issues/3052). Do not open the
+fix PR until a maintainer confirms the bug with the required `confirmed-bug` label.
+
+### Candidate next slices
+
+1. **Entry 12 — `state.validate` drift detection (recommended):** High-severity, deterministic,
+   standalone defect. The validator's disk scan is gated on a field the shipped template does not
+   emit, making its primary failure path structurally unreachable.
+2. **Entry 11 — progress falsely reports 100%:** Medium-high impact on the central progress signal.
+   The aggregate summary/plan ratio can report completion while execution remains outstanding.
+3. **Entries 14, 15, and 16 — milestone-scoping safety cluster:** Treat as one dependency-aware
+   slice. Entry 14 disables a resume safety gate; entry 15 becomes a wrong-routing bug when 14 is
+   fixed; entry 16 turns the same scoping weakness into destructive cross-milestone archival.
+
+Entry 10 remains an enhancement bundle and requires upstream approval before implementation. Entries
+13, 17, and 18 are independently reproducible ready bugs, but rank behind the safety and validator
+work above.
 
 ---
 
@@ -1382,5 +1579,16 @@ disarming `/gsd:progress --next`'s resume-incomplete-phase invariant). Entry 14 
 negative control after a first, wrongly-constructed control appeared to refute it. Updated
 2026-08-04 during DevFlow's v2.3.0 milestone close with entry 16 (`milestone.complete`'s pass-all
 degrade inherits entry 14's window truncation and archived all 48 project phases instead of the
-milestone's 2 — reproduced live, caught before commit, reverted with no data loss). Update
-`Status:` and record the issue link when each entry is filed upstream.*
+milestone's 2 — reproduced live, caught before commit, reverted with no data loss). Updated
+2026-08-04 (same day, retroactive v1.0/v2.0.0 archival) with entry 17 (`query progress`
+/ `cmdProgressRender` lists every `999.*` backlog directory as a phase, missing both the
+milestone-window scoping and the sentinel filter its siblings `roadmap.analyze` and
+`getMilestonePhaseFilter` both have — root-caused directly against `commands.cts:1549-1610`).
+Updated 2026-08-04 (same day, closing DevFlow's `gsd-hygiene` milestone) with entry 18
+(`buildPhaseCompletionProjection` requires `planCount > 0` before it will even read a phase's
+`*-VERIFICATION.md`, so a legitimately-complete zero-plan phase is reported `phase_complete:
+false` forever — worked around locally with an operator-approved, explicitly-labeled backfilled
+PLAN/SUMMARY pair rather than silently overriding the gate). Updated 2026-08-04 after Phase 01:
+entry 9 was filed as upstream issue #3052, and the next-slice assessment prioritized entry 12,
+followed by entry 11 and the linked 14/15/16 milestone-safety cluster.
+Update `Status:` and record the issue link when each entry is filed upstream.*
