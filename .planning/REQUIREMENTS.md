@@ -32,14 +32,14 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| STATE-02 | Unassigned | Pending |
-| QUALITY-02 | Unassigned | Pending |
+| STATE-02 | Phase 2 | Pending |
+| QUALITY-02 | Phase 2 | Pending |
 
 **Coverage:**
 
 - v1.1 requirements: 2 total
-- Mapped to phases: 0
-- Unmapped: 2
+- Mapped to phases: 2
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-08-04*
