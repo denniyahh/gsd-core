@@ -35,6 +35,15 @@ The codebase is an npm package built primarily from TypeScript/CommonJS runtime 
 
 `scratch/UPSTREAM-GSD-ISSUES.md` records evidence gathered while dogfooding. The first milestone completed confirmed item 9 (planned-phase frontmatter synchronization); item 10 (model/effort configuration consistency) remains documented research for a later milestone. The codebase map under `.planning/codebase/` records the current architecture, stack, conventions, tests, and risks.
 
+## Current State
+
+v1.0 shipped on 2026-08-04. It delivered the planned-phase state-integrity repair and its focused command-level regression. The completed phase and its verification evidence are archived under `.planning/milestones/v1.0-phases/`.
+
+## Next Milestone Goals
+
+- Define the next contribution slice and refresh its requirements before creating a new roadmap.
+- Revisit the documented model/effort configuration consistency work as a coherent, separately planned milestone.
+
 ## Constraints
 
 - **Runtime support**: Preserve behavior across supported host runtimes and capability contracts — GSD is distributed beyond the current Codex session.
@@ -72,4 +81,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-08-04 after Phase 1 completion*
+*Last updated: 2026-08-04 after v1.0 milestone completion*

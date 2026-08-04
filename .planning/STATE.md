@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 01
-status: completed
+status: Awaiting next milestone
 stopped_at: Initial roadmap created; Phase 1 is ready for planning.
-last_updated: "2026-08-04T17:40:11.315Z"
+last_updated: "2026-08-04T18:54:30.210Z"
 last_activity: 2026-08-04
-last_activity_desc: Phase 01 complete
+last_activity_desc: Milestone v1.0 completed and archived
 progress:
   total_phases: 1
   completed_phases: 1
   total_plans: 1
   completed_plans: 1
+current_phase: 01
 current_phase_name: planned-phase-state-integrity
 ---
 
@@ -27,12 +27,10 @@ See: .planning/PROJECT.md (updated 2026-08-02)
 
 ## Current Position
 
-Phase: 01
-Plan: Not started
-Status: All phases complete
-Last activity: 2026-08-04 — Phase 01 complete
-
-Progress: [██████████] 100%
+Phase: Milestone v1.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-08-04 — Milestone v1.0 completed and archived
 
 ## Performance Metrics
 
@@ -79,3 +77,7 @@ None yet.
 Last session: 2026-08-02
 Stopped at: Initial roadmap created; Phase 1 is ready for planning.
 Resume file: None
+
+## Operator Next Steps
+
+- Start the next milestone with $gsd-new-milestone
