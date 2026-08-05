@@ -1553,8 +1553,23 @@ conventions try to avoid; recorded plainly in both documents' bodies for that re
 
 ## 19. `code-review.md`'s `DIFF_BASE` greps commit messages for a bare phase number, so an unrelated substring match reaches back into old history and expands the review scope to the whole project
 
-**Status:** not yet filed upstream. Found 2026-08-04 during DevFlow phase 33's post-execution
-code-review gate.
+**Status:** DUPLICATE — do not file. Already open upstream as
+[open-gsd/gsd-core#2989](https://github.com/open-gsd/gsd-core/issues/2989), created 2026-08-02 by
+`0xdhx`, **two days before this write-up**. Same component, same mechanism (unanchored
+`--grep="${PADDED_PHASE}"`, `tail -1` selecting the oldest substring match as the base). Their
+reproduction is starker than ours: *"in this repo, 2153 of 5299 commits match phase 7."* Checked
+2026-08-05 via `gh search issues --repo open-gsd/gsd-core DIFF_BASE`; #2989 was still `OPEN`.
+
+Keep this entry as the **DevFlow-side evidence record** — it carries a concrete local instance
+(#2989 does not), and the recovery below is what an operator here needs. But route any upstream
+discussion to #2989 rather than opening a second issue.
+
+Found 2026-08-04 during DevFlow phase 33's post-execution code-review gate; recurred visibly
+2026-08-05 when the phase-33 review resolved its base to `ad3b37d docs(12-10): …` — a **phase-12
+commit from 2026-07-08**, roughly a month of unrelated history pulled into the review scope. The
+orchestrator caught it by cross-checking the SUMMARY-derived file list against `git diff` from the
+true `git merge-base develop HEAD`; both returned the same 7 files, which is what exposed the
+computed `DIFF_BASE` as wrong rather than merely wide.
 
 ### What happens
 
