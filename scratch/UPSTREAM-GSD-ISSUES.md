@@ -132,6 +132,43 @@ because nothing in the workflow consults it. Until this is filed and fixed upstr
 durable mitigation is a **local guard**, not a document (see "Preventing recurrence" at the end of
 this file).
 
+### Third occurrence — 2026-08-05, phase 33, PR #90
+
+**Reproducibility is now confirmed 3/3.** Same step, same token, same wedge, five days after the
+second. Found only because the operator noticed the GitHub PR page "looks inconclusive" — nothing
+in the workflow surfaced it, exactly as the recurrence note above predicted.
+
+The upstream fix is **proposed but not shipped**: PR
+[#2818](https://github.com/open-gsd/gsd-core/pull/2818) (*"fix(#2783): address wedged PRs in ship
+note protocol"*) is still `state: OPEN`, `mergedAt: null` as of this occurrence. The installed
+runtime is `@opengsd/gsd-pi@1.12.0`, whose `workflows/ship.md:457` still carries the token
+verbatim. So this keeps firing on every `/gsd-ship` until that PR lands **and** a release
+containing it is installed — this entry's `Status: DONE` refers to the write-up and upstream
+filing, not to the defect being fixed in the operator's runtime. Worth reading that way at a glance.
+
+Evidence, captured as a controlled comparison on one branch — the SHAs differ only in whether the
+message carries the token:
+
+| Commit | Message | Check runs on that SHA |
+|---|---|---|
+| `f02d25c` | `chore: ignore the MemPalace capture staging directory` | **8** |
+| `0ffccb8` | `docs(33): ship phase 33 — PR #90 [ci skip]` | **0** |
+| `6640b91` | `chore(gsd): enable the TDD capability via workflow.tdd_mode` | **8** |
+
+`gh pr checks 90` reported *"no checks reported on the 'feature/phase-33' branch"* while
+`gh run list --branch feature/phase-33` simultaneously showed two `pull_request` runs at
+`conclusion: success` — both pinned to `f02d25c`, the pre-ship-note SHA. That pair of outputs is
+the signature to recognise: **the runs exist and passed, but not on the head the PR points at.**
+Reading `gh run list` alone reads as healthy and is the trap; only a per-SHA
+`gh api repos/OWNER/REPO/commits/<sha>/check-runs --jq .total_count` discriminates.
+
+**Recovery used this time (a fifth option):** rather than amending, push an unrelated commit that
+was already pending and carries no token — here the TDD-capability enablement. It becomes the new
+head and re-fires CI. Cheaper than a force-push when a legitimate commit happens to be queued, and
+it avoids rewriting already-pushed history on an open PR. The cost is that it widens the PR's scope
+by one commit, so it is only appropriate when that commit genuinely belongs in the same PR or the
+operator accepts the widening.
+
 ---
 
 ## Also observed this session — not yet written up
@@ -1511,6 +1548,89 @@ commit). Operator-approved (2026-08-04) rather than silently applied — this wo
 a PLAN/SUMMARY pair the phase's own CONTEXT.md explicitly decided was unnecessary, solely to
 satisfy a tooling assumption, which is exactly the kind of provenance-blurring this project's own
 conventions try to avoid; recorded plainly in both documents' bodies for that reason.
+
+---
+
+## 19. `code-review.md`'s `DIFF_BASE` greps commit messages for a bare phase number, so an unrelated substring match reaches back into old history and expands the review scope to the whole project
+
+**Status:** not yet filed upstream. Found 2026-08-04 during DevFlow phase 33's post-execution
+code-review gate.
+
+### What happens
+
+`compute_file_scope` — and, identically, the fallow pre-pass's `FALLOW_BASE` — derives the review's
+diff base like this:
+
+```bash
+PHASE_COMMITS=$(git log --oneline --all --grep="${PADDED_PHASE}" --format="%H" 2>/dev/null)
+DIFF_BASE=$(echo "$PHASE_COMMITS" | tail -1)^
+```
+
+`--grep` takes an unanchored regex and `PADDED_PHASE` is a bare number, so the pattern matches that
+digit string **anywhere** in any commit message — including inside longer numbers and inside
+identifiers. `tail -1` then selects the *oldest* match in the entire repository as the base.
+
+### Concrete instance on DevFlow
+
+For phase 33 the pattern was `33`. Measured on this repo at HEAD `5d7f622`:
+
+| Pattern | Commits matched |
+|---|---|
+| `--grep="33"` (as shipped) | 71 |
+| `-E --grep="^[a-z]+\(33[-)]"` (anchored to the commit convention) | 32 |
+
+The oldest of the 71 was `ad3b37d docs(12-10): clarify timezone-safe second-restoration`. It
+contains no phase-33 reference at all — the match is the `33` inside **`parse_rfc3339ish`**, a
+function name in the body text. `DIFF_BASE` became its parent, `b6b2a7d test(12-09): …`, roughly
+twenty phases before the phase under review.
+
+The resulting scope, under the workflow's own exclusion list:
+
+| Base | Files in scope |
+|---|---|
+| `b6b2a7d` (grep-derived) | **201** |
+| `7b55fce` (`git merge-base origin/develop HEAD`) | **7** |
+
+Seven is correct, and it matches the SUMMARY `key-files` extraction exactly.
+
+### Why the existing guards do not catch it
+
+- The `#2666` SUMMARY-vs-diff cross-check assumes the diff is authoritative and the SUMMARY may be
+  partial. When the base is wrong that polarity is backwards: it treats all 194 extra files as
+  files the SUMMARY *missed*, **adds them to the review scope**, and prints a confident
+  `Warning: SUMMARY scope was missing N changed file(s)`. A correct 7-file scope is silently
+  converted into a 201-file one.
+- The `> 50 files` guard does fire, but only downgrades `deep` to `standard`. It never questions
+  the base — it reads as "this phase was large", not "this base is wrong".
+- Nothing compares the derived base against the phase branch's actual fork point, which is
+  available and O(1).
+
+### Suggested fixes
+
+1. **Anchor the grep to the commit-message convention.** GSD's own commits are
+   `type(NN-PP): subject` / `type(NN): subject`, so `-E --grep="^[a-z]+\(${PADDED_PHASE}[-)]"` is
+   both anchored and specific. On this repo that alone drops 71 matches to 32, all genuine.
+2. **Prefer the branch fork point.** `git merge-base <base-branch> HEAD` is exact and needs no
+   message convention; fall back to the grep only on a detached or non-branch checkout.
+3. **Sanity-gate the derived base.** If the diff exceeds some multiple of the SUMMARY scope, refuse
+   the cross-check and warn that the base looks wrong instead of silently widening the review.
+
+Fixes 1 and 2 are independent and either closes it; 2 is the stronger one because it does not
+depend on commit hygiene.
+
+### Local workaround
+
+Compute the base by hand and pass the scope to the reviewer explicitly:
+
+```bash
+git merge-base origin/develop HEAD    # 7b55fce on phase 33
+```
+
+Then diff against it and compare with the SUMMARY-extracted list. On phase 33 the two methods
+returned the same 7 files — that agreement is what established the SUMMARY scope was complete and
+the grep-derived base was the broken input, rather than the other way round. The orchestrator
+passed the merge-base to `gsd-code-reviewer` in the `<config>` block along with an explicit
+instruction not to re-derive it with `--grep`.
 
 ---
 
