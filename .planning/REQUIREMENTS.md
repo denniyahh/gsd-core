@@ -8,11 +8,11 @@
 
 ### State Diagnostics
 
-- [ ] **STATE-02**: A contributor running `state.validate` on the shipped `STATE.md` shape receives active-phase drift findings from disk; resolution reads `current_phase` frontmatter first, then the canonical `Phase:` prose field.
+- [x] **STATE-02**: A contributor running `state.validate` on the shipped `STATE.md` shape receives active-phase drift findings from disk; resolution reads `current_phase` frontmatter first, then the canonical `Phase:` prose field.
 
 ### Verification
 
-- [ ] **QUALITY-02**: A maintainer can verify STATE-02 through a focused regression test that proves the validator reports drift for that normal state-document shape.
+- [x] **QUALITY-02**: A maintainer can verify STATE-02 through a focused regression test that proves the validator reports drift for that normal state-document shape.
 
 ## Future Requirements
 
@@ -32,8 +32,8 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| STATE-02 | Phase 2 | Pending |
-| QUALITY-02 | Phase 2 | Pending |
+| STATE-02 | Phase 2 | Complete |
+| QUALITY-02 | Phase 2 | Complete |
 
 **Coverage:**
 
