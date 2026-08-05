@@ -35,10 +35,12 @@ Milestone v1.1 repairs the existing `state.validate` path so the shipped `STATE.
   2. When `current_phase` is absent, the same validation resolves the canonical body `Phase:` field and still performs the on-disk drift checks; when both forms exist, frontmatter remains authoritative.
   3. A maintainer can run a focused regression that uses the shipped state-document shape and proves the validator reaches and reports a known disk-drift condition.
 
-**Plans**: TBD
+**Plans**: 1/1 plans executed
+
+- [x] 02-01-PLAN.md
 
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 2. State Validation Drift Diagnostics | v1.1 | 0/TBD | Not started | - |
+| 2. State Validation Drift Diagnostics | v1.1 | 1/1 | In Progress|  |
