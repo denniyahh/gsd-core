@@ -933,6 +933,19 @@ None applied. The number is read-only and advisory; DevFlow's own gates do not c
 Operators should treat the statusline percentage as unreliable near completion and check
 `query progress` phase-by-phase instead.
 
+### Recurrence — 2026-08-06, DevFlow phase 34 close, a different call site
+
+Same root cause (a SUMMARY without a corresponding PLAN — phase 34's `34-06b-SUMMARY.md` has no
+`34-06b-PLAN.md`), reached through a **different** function this time: `phase.complete`, not
+`query progress`. It wrote `"plans_executed": "7/6"` directly into the ROADMAP `## Progress` table's
+per-phase row (7 SUMMARYs / 6 PLANs), rather than into the aggregate milestone `percent` this entry
+documents. The number is self-evidently nonsensical on sight (a ratio exceeding its own denominator,
+printed as a plan count) rather than silently clamped to 100 — a smaller blast radius than the
+aggregate case, but the same unguarded assumption: one summary per plan. Hand-corrected to `6/6`
+before committing (`gsd_run query phase.complete` does not clamp or warn on `summaries > plans`
+either). Confirms the fix should live where both call sites can share it — a summary/plan
+correspondence check, not a `query progress`-only patch.
+
 ---
 
 ## 12. `state.validate` can never report drift, because its entire disk scan is gated on a field the shipped template never emits
@@ -1048,6 +1061,20 @@ authored prose is now stale, writing a marker under the gitignored `.devflow/`. 
 **not** mutate tracked files: plans in this repository carry scope fences asserting
 `git diff --name-only` lists only their own files, and a hook that dirties `STATE.md` mid-phase would
 break them. The hook is a local signal, not a fix — the validator remains inert.
+
+### Recurrence — 2026-08-06, DevFlow v2.4.0 milestone close
+
+Reproduced again, independently, with a fresh mechanism confirming the root cause rather than just
+its symptom. After `/gsd-complete-milestone v2.4.0` ran, `STATE.md`'s frontmatter still read
+`milestone_name: "...ACTIVE — declared 2026-08-04"` and `current_phase: 34`, directly contradicting
+the adjacent `status: "Awaiting next milestone"` in the same frontmatter block — `state.validate`
+reported `{"valid": true, "warnings": [], "drift": {}}` regardless. As a second, more direct check:
+temporarily injected an actually-malformed duplicate `milestone:` frontmatter key (broken YAML, not
+just stale content) as a negative control, re-ran `state.validate`, got the identical `valid: true`
+result, then reverted. Two different classes of real defect — stale-but-syntactically-valid content,
+and a broken key — both invisible to the same validator in the same session, consistent with entry
+12's diagnosis that the checks are gated behind an extraction that structurally never fires rather
+than behind logic that's merely incomplete.
 
 ---
 
@@ -1727,3 +1754,86 @@ PLAN/SUMMARY pair rather than silently overriding the gate). Updated 2026-08-04 
 entry 9 was filed as upstream issue #3052, and the next-slice assessment prioritized entry 12,
 followed by entry 11 and the linked 14/15/16 milestone-safety cluster.
 Update `Status:` and record the issue link when each entry is filed upstream.*
+
+---
+
+## 21. `milestone.complete`'s accomplishment extraction grabs the first bolded run after the first heading, not a summary
+
+**Status:** Not yet filed upstream.
+**Found:** 2026-08-06, DevFlow v2.4.0 milestone close (`milestone.complete "v2.4.0" --name "..."`).
+**Component:** `gsd-core/bin/lib/core-utils.cjs` (`extractOneLinerFromBody`), consumed by
+`gsd-core/bin/lib/milestone.cjs:563` and `gsd-core/bin/lib/commands.cjs:1245`.
+**Severity:** medium — no data loss and nothing downstream gates on the extracted text, but it
+silently replaces a human-meaningful milestone changelog entry with noise, and the failure looks
+identical to success (a non-empty, plausible-looking bullet list is returned every time).
+**Reproducibility: confirmed**, deterministic given the SUMMARY.md content, not environment-specific.
+
+### What happens
+
+`gsd_run query milestone.complete "v2.4.0" --name "Resume Unattended Dogfooding"` returned an
+`accomplishments` array whose entries included:
+
+```
+"1. [Rule 1 - Bug] Task 2's three new tests spawned a real agent CLI process on first attempt"
+"NeutralPath"
+"The production fix is one expression"
+"The production change is two arguments."
+"This is the most important thing in this summary."
+"EXIT=0"
+```
+
+None of these describe what the phase actually delivered. They were written verbatim into
+`MILESTONES.md`'s `## v2.4.0 ...` entry — the permanent historical record of the release — until
+caught and hand-rewritten before commit.
+
+### Root cause
+
+`extractOneLinerFromBody` (`core-utils.cjs:71`) does not look for a summary-specific heading. It
+matches the **first** heading anywhere in the body, then takes the first bolded run immediately
+after it:
+
+```js
+const match = body.match(/^#[^\n]*\n+\*\*([^*\n]+)\*\*([^\n]*)/m);
+```
+
+There is no requirement that this heading be a "Summary", "Accomplishments", "Overview", or any
+other section whose first bold text is likely to describe the deliverable. On a SUMMARY.md whose
+document-order first heading is something incidental — a numbered rule list, a task breakdown, a
+deviation note — the function faithfully returns the first thing that happens to be bold under it,
+which can be a rule label (`**Rule 1 - Bug**`), a code identifier (`**NeutralPath**`), or a
+fragment of a sentence describing something true but not summary-shaped (`**The production fix is
+one expression**`).
+
+Frontmatter `one-liner` is checked first and would bypass this entirely (`milestone.cjs:563`:
+`(typeof rawOneLiner === 'string' ? rawOneLiner : '') || extractOneLinerFromBody(content)`), but none
+of the six SUMMARY.md files in this milestone declared one — the fallback is not a rare path, it is
+the only path for any SUMMARY authored without that specific frontmatter field.
+
+### Why this is the same failure shape as entry 12
+
+A heuristic that cannot distinguish "found the real summary" from "found the first bold text that
+happened to be nearby" reports success — a non-null, populated string — in both cases. There is no
+signal that would tell an operator the extraction missed, short of reading the generated
+`MILESTONES.md` entry against the source SUMMARYs by hand, which is the only reason this was caught
+here.
+
+### Suggested fixes (1 alone closes it; 2 and 3 are hardening)
+
+1. **Anchor to a specific heading**, e.g. require the heading text to match `/summary|overview|
+   accomplish/i` before extracting from beneath it, falling back to `null` (not the wrong text) if
+   no such heading exists.
+2. **Prefer a dedicated frontmatter field and treat its absence as a gap to report, not paper over.**
+   `milestone.complete` could emit `"accomplishments_incomplete": true` (or name which phases
+   contributed no usable one-liner) rather than silently filling the slot with whatever the regex
+   found.
+3. **Sanity-gate the extracted text.** A one-liner beginning with a digit-dot list marker, or under
+   ~4 words with no verb, is more likely a stray label than a summary sentence — reject and fall
+   through to `null` rather than accept it.
+
+### Local workaround
+
+Read the generated `accomplishments` array (or the `MILESTONES.md` entry it produces) against the
+source `*-SUMMARY.md` files before committing, and hand-rewrite any entry that doesn't read as a
+real accomplishment. Done for v2.4.0 (`.planning/MILESTONES.md`, commit `ff4ebd0` in DevFlow).
+
+---
