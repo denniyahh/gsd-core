@@ -1757,6 +1757,89 @@ Update `Status:` and record the issue link when each entry is filed upstream.*
 
 ---
 
+## 20. `parseDecisions`' parse-miss guard fires on a *cross-reference* to another decision, and a single miss zeroes the whole coverage analysis — blocking `/gsd-plan-phase` on a phase whose decisions are in fact 15/15 covered
+
+**Status:** Not yet filed upstream.
+
+Found 2026-08-05 during DevFlow Phase 34 planning. `/gsd-plan-phase 34`'s §13a Decision Coverage
+Gate — which is **blocking** (`exit 1`) — returned:
+
+```json
+{ "passed": false, "skipped": false, "reason": "could-not-parse",
+  "total": 15, "covered": 0, "uncovered": [], "message": "…one or more `- **D-NN …**` bullets appear malformed…" }
+```
+
+with two warnings naming the offending bullets. The phase's decisions were **not** malformed and
+**not** uncovered: an independent recount across the five PLAN.md files found all 15 of D-01…D-15
+cited, with two negative controls holding (a nonexistent `D-99` scored 0; `DOGFOOD-04` did not
+false-match `D-04`). After the cosmetic reformat below, the same gate returned
+`passed: true, total: 15, covered: 15` — confirming the count two independent ways.
+
+### What happens
+
+`src/decisions.cts:206` guards against a decision bullet that matched none of the three declaration
+patterns:
+
+```js
+if (/^\s*-\s+\*\*D-/.test(line)) { flush(); parseMisses += 1; console.warn(...); continue; }
+```
+
+That test matches **any** bullet whose bold run merely *begins with* `D-`. It does not require a
+decision ID, and — the actual problem — it does not distinguish a **declaration** from a
+**cross-reference to another decision**. The three declaration patterns
+(`bulletColonRe:62`, `bulletEmDashRe:72`, `bulletTitledColonRe:85`) all require a `:` or an
+em/en-dash inside the bold run, so a citation bullet naturally misses all three and lands on the
+guard.
+
+The two bullets that tripped it were plain prose inside D-15's body, listing that decision's
+consequences for its siblings:
+
+```markdown
+  - **D-06's fix does not close this.** Gating the `Passed` arm on the derived status passes
+    cleanly here. Criterion 3 and criterion 4 are separate deliverables.
+  - **D-13 (999.76) must not land without this fix.** Moving Layer 0 discovery to the execution
+    root makes `decided_by_layer == Some(0)` common rather than rare…
+```
+
+### Why the blast radius is larger than a warning
+
+`parseMisses > 0` forces `reason: "could-not-parse"`, which **short-circuits the coverage analysis
+entirely** — the handler returns `covered: 0` and `uncovered: []` without ever comparing decisions
+against plans. So the failure is indistinguishable, from the gate output alone, between "the
+document has a formatting nit" and "not one decision is covered." An operator reading
+`total: 15, covered: 0` would reasonably conclude the plan set dropped every decision. It did not.
+
+The `uncovered: []` beside `covered: 0` is the tell — a genuine total-coverage failure would list
+15 uncovered IDs. That inconsistency is what makes the false positive detectable at all, and it is
+worth preserving deliberately rather than by accident.
+
+### Recovery (what was done here)
+
+Reformatted the two bullets so the bold run no longer *starts* with `D-`, moving the reference
+inside: `- **Criterion 3 (D-06's fix) does not close this.**` and
+`- **999.76 (D-13) must not land without this fix.**`. Not one word after the bold run changed and
+both `D-NN` references survive; the diff is three lines, formatting only. Operator-approved rather
+than applied silently, because `34-CONTEXT.md` is a twice-adversarially-reviewed decision document
+whose amendment discipline is explicit.
+
+### Suggested fix
+
+Two independent changes, either of which closes it:
+
+1. **Tighten the guard** to require a decision-ID shape — e.g. `/^\s*-\s+\*\*D-\d/` plus a
+   look-ahead for one of the three separators — so a bullet that merely cites `D-NN` in prose is
+   treated as body text, not a malformed declaration.
+2. **Do not let `parseMisses` zero the analysis.** Run the coverage comparison over the decisions
+   that *did* parse and report `parseMisses` alongside it, so the gate can distinguish "1 bullet
+   unreadable, 15/15 of the readable ones covered" from "0 covered." As written, one cosmetic miss
+   is indistinguishable from total failure — and the gate is blocking.
+
+A cross-reference between decisions is a natural shape in any phase whose decisions interact; this
+one is not exotic. DevFlow's Phase 34 produced it from an ordinary "consequences for the other
+decisions" list.
+
+---
+
 ## 21. `milestone.complete`'s accomplishment extraction grabs the first bolded run after the first heading, not a summary
 
 **Status:** Not yet filed upstream.
@@ -1837,3 +1920,127 @@ source `*-SUMMARY.md` files before committing, and hand-rewrite any entry that d
 real accomplishment. Done for v2.4.0 (`.planning/MILESTONES.md`, commit `ff4ebd0` in DevFlow).
 
 ---
+
+## `state.record-session` mangles `milestone_name` when the ROADMAP heading carries a parenthetical
+
+**Found:** 2026-08-06, DevFlow, during `/gsd-discuss-phase 35`.
+
+**Also reproduces in `state.begin-phase`:** 2026-08-07, DevFlow, during `/gsd-execute-phase 35` —
+same heading, byte-identical wrong value. So this is not one verb's bug: at least two verbs
+re-derive `milestone_name` from the heading, and fix (1) below has to cover the shared helper
+rather than a single call site.
+
+**`state.begin-phase` additionally clobbers `current_phase_name` with the directory slug.** It
+writes whatever `--name` it is handed, and `init.execute-phase` returns the phase *slug* in its
+`phase_name` field (`loop-termination-and-baseline-correctness-999-77-999-78-999-`), not the display
+name. An orchestrator wiring one into the other — the obvious wiring, and what the execute-phase
+workflow's own template implies — turns `Loop-Termination and Baseline Correctness` into that slug
+on every phase start. Either `init.execute-phase` should return display name and slug as distinct
+fields, or `begin-phase` should reject a value that looks like a slug.
+
+**Severity: Low** — cosmetic in STATE.md's frontmatter, but it is silent, it recurs on *every*
+session record and *every* phase start, and it degrades a field other tooling reads.
+
+### What happens
+
+`gsd-tools query state.record-session` re-derives `milestone_name` from the active milestone's
+`## ` heading in `ROADMAP.md` instead of preserving the existing frontmatter value. Given DevFlow's
+heading:
+
+```
+## 🚧 v2.5.0 milestone (Loop-Termination and Release Hardening, ACTIVE — declared 2026-08-06)
+```
+
+it wrote:
+
+```yaml
+milestone_name: milestone (Loop-Termination and Release Hardening, ACTIVE — declared 2026-08-06)
+```
+
+overwriting the correct prior value `Loop-Termination and Release Hardening`. The parse appears to
+strip the emoji and the version token, then take *the entire remainder* as the name — so the literal
+word `milestone`, the status marker, and the declaration date all end up inside the name.
+
+### Why it is not self-correcting
+
+Nothing downstream validates the field, and the write happens on every `state.record-session` call.
+The result still looks plausible (it contains the real name as a substring), so it reads as correct
+at a glance. Each subsequent session re-derives from the same heading, so it stays wrong rather than
+drifting back.
+
+Note the interaction with the milestone-window fragility already recorded for `roadmap.analyze` /
+`deriveProgressFromRoadmap`: these parsers all key off the same `## ` heading, and this project's
+convention of putting status and dates in that heading is what exposes the weak parse.
+
+### Suggested fixes (1 alone closes it)
+
+1. **Do not re-derive a field that already has a value.** `milestone_name` is set at milestone
+   declaration; `record-session` has no reason to touch it.
+2. **If it must be derived, anchor the extraction.** Take the text between the version token and the
+   first `(` or `,`, rather than "everything after the version token".
+3. **Round-trip check.** If the derived value differs from the persisted one, report it rather than
+   overwrite silently — an operator can then say which is right.
+
+### Local workaround
+
+After any `state.record-session`, diff `.planning/STATE.md` and restore `milestone_name` by hand.
+Done for Phase 35's context session.
+
+---
+
+## 22. `gsd-planner` emits `<automated>` acceptance commands it never executed — an unrunnable check reads as a verified one
+
+**Found:** 2026-08-07, DevFlow, during `/gsd-execute-phase 35`.
+**Severity: Medium** — not cosmetic. The defect is in the artifact that *defines* what "verified"
+means for a plan, and it degrades silently in the direction of false confidence.
+
+### What happens
+
+`/gsd-plan-phase 35` produced six plans containing **21 occurrences** of:
+
+```
+cargo test -p devflow --lib <module>::…
+```
+
+`devflow` is a binary-only package (`devflow[bin]`, no `src/lib.rs`). Cargo rejects the command
+before running anything:
+
+```
+error: no library targets found in package 'devflow'
+```
+
+These were not incidental mentions. They sat inside `<automated>` blocks — the machine-readable
+acceptance criteria a plan is judged against — across four of the six plans (35-01: 5, 35-02: 4,
+35-04: 6, 35-05: 6). The sibling form `-p devflow-core --lib` *is* valid, so the error is not a
+blanket misunderstanding of cargo; it is a package-shape fact the planner did not check.
+
+### Why it matters more than the wrong flag
+
+A plan's `<automated>` block is the thing that decides whether work is done. A command that cannot
+run has no failing direction, so nothing about it is falsifiable. It reads as rigour and delivers
+none. Three separate executors each rediscovered the same defect independently, on the clock, and
+each had to invent a substitute command — meaning the *actual* acceptance criteria for those plans
+were improvised at execution time rather than reviewed at planning time.
+
+It is the same failure shape as entry 20: a check that appears to measure something and doesn't.
+
+### What made it survivable here
+
+Cargo exits non-zero, so this failed loudly rather than passing green. That is luck, not design —
+the identical class of error with a command that exits 0 on a no-op (e.g. `cargo test --exact` on a
+name matching nothing, already recorded in DevFlow's own CLAUDE.md) would have produced a silent
+false pass.
+
+### Suggested fixes
+
+1. **Execute every `<automated>` command once at plan time** and record its exit status in the plan.
+   A command that cannot run should block the plan, not ship inside it.
+2. **Failing that, validate the shape** — resolve `cargo metadata` for the workspace and reject
+   `--lib` against a package with no lib target, `--bin X` against a package with no such bin, etc.
+3. **Require a stated failing direction.** For each acceptance command, the plan should say what
+   output constitutes failure. A command with no expressible failure mode is not an acceptance test.
+
+### Local workaround
+
+Corrected 35-04 and 35-05 by hand to `-p devflow --bin devflow` before dispatching their waves, and
+recorded the trap in DevFlow's CLAUDE.md verification-habits section.
