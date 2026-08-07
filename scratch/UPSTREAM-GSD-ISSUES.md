@@ -235,7 +235,7 @@ provide — which misled this session into believing the ledger was gating a shi
 
 ### 6. `query commit` will commit onto a protected integration branch with no guard
 
-**Status:** FILED — filed upstream as [#3158](https://github.com/open-gsd/gsd-core/issues/3158)
+**Status:** APPROVED — filed upstream as [#3158](https://github.com/open-gsd/gsd-core/issues/3158)
 `git.branching_strategy: "none"`, `query commit` committed successfully on `develop`. This is a
 safety enhancement because the documented `none` contract intentionally commits on the current
 branch; the low-risk fix is an early warning on the resolved base branch, not a blanket refusal.
@@ -761,7 +761,7 @@ comments in the same commit as any legitimate change from that call.
 
 ## 10. `model` and `effort` resolve through different mechanisms at different times, and the docs assert a symmetry that does not exist
 
-**Status:** FILED — filed upstream as [#3160](https://github.com/open-gsd/gsd-core/issues/3160)
+**Status:** APPROVED — filed upstream as [#3160](https://github.com/open-gsd/gsd-core/issues/3160)
 in the current resolver/sync source contract. This remains an enhancement bundle, not one defect.
 **Found:** 2026-08-02, DevFlow — routing subagent models/effort so the session model reaches the executor
 **Component:** `gsd-core/bin/lib/model-resolver.cjs`, `install-effort-resolver.cjs`,
