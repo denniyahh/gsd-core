@@ -1080,7 +1080,7 @@ than behind logic that's merely incomplete.
 
 ## 13. `phase.add` inserts the new phase at the file's last `---`, which on a long roadmap is nowhere near the phase list
 
-**Status:** FILED — filed upstream as [#3163](https://github.com/open-gsd/gsd-core/issues/3163)
+**Status:** CONFIRMED — filed upstream as [#3163](https://github.com/open-gsd/gsd-core/issues/3163)
 **Found:** 2026-08-03, DevFlow phase 31 creation (`/gsd:phase`)
 **Component:** `gsd-core/src/phase.cts`, `cmdPhaseAdd` (line 882) and `cmdPhaseAddBatch` (line 970)
 **Severity:** medium — silently files the new phase inside unrelated (often historical) prose. No
@@ -1318,7 +1318,7 @@ for anyone else.
 
 ## 16. `milestone.complete`'s "no phases found → assume unscoped" degrade inherits issue 14's window truncation and converts it into a pass-all filter that archives every phase in the project, not just the milestone's own
 
-**Status:** FILED — filed upstream as [#3166](https://github.com/open-gsd/gsd-core/issues/3166)
+**Status:** CONFIRMED — filed upstream as [#3166](https://github.com/open-gsd/gsd-core/issues/3166)
 **Found:** 2026-08-04, DevFlow, running `/gsd-complete-milestone` for v2.3.0 (phases 30–31 only)
 **Component:** `gsd-core/src/roadmap-parser.cts` `getMilestonePhaseFilter` (pass-all degrade at
 line 715); consumed by `gsd-core/src/milestone.cts` `cmdMilestoneComplete` (phase-collection loop
@@ -1409,7 +1409,7 @@ several-hundred-line restructure cost.
 
 ## 17. `query progress` (`cmdProgressRender`) lists every `999.*` backlog directory as a phase of the current milestone — it has neither the sentinel filter nor the milestone-window scoping its sibling `roadmap.analyze` has
 
-**Status:** FILED — filed upstream as [#3167](https://github.com/open-gsd/gsd-core/issues/3167)
+**Status:** CONFIRMED — filed upstream as [#3167](https://github.com/open-gsd/gsd-core/issues/3167)
 **Found:** 2026-08-04, DevFlow, checking `gsd-tools` health after the v1.0/v2.0.0/v2.3.0
 retroactive milestone archival (prompted by an operator question about whether a related fix was
 complete)
@@ -1489,7 +1489,7 @@ what to work on next. No workaround applied — filed for the record only.
 
 ## 18. `buildPhaseCompletionProjection` requires `planCount > 0` to ever check verification, so a phase with zero plans is permanently reported `phase_complete: false` / `verification_status: "not_required"` even when a real, passing `*-VERIFICATION.md` exists
 
-**Status:** FILED — filed upstream as [#3168](https://github.com/open-gsd/gsd-core/issues/3168)
+**Status:** CONFIRMED — filed upstream as [#3168](https://github.com/open-gsd/gsd-core/issues/3168)
 **Found:** 2026-08-04, DevFlow, closing Phase 32 (`gsd-hygiene` milestone) — a docs-only phase
 whose goal was already satisfied by a prior write, so it deliberately went through
 `/gsd-discuss-phase` and a standalone verification with no `/gsd-plan-phase` / `/gsd-execute-phase`
@@ -1759,7 +1759,7 @@ Update `Status:` and record the issue link when each entry is filed upstream.*
 
 ## 20. `parseDecisions`' parse-miss guard fires on a *cross-reference* to another decision, and a single miss zeroes the whole coverage analysis — blocking `/gsd-plan-phase` on a phase whose decisions are in fact 15/15 covered
 
-**Status:** FILED — filed upstream as [#3169](https://github.com/open-gsd/gsd-core/issues/3169)
+**Status:** CONFIRMED — filed upstream as [#3169](https://github.com/open-gsd/gsd-core/issues/3169)
 
 Found 2026-08-05 during DevFlow Phase 34 planning. `/gsd-plan-phase 34`'s §13a Decision Coverage
 Gate — which is **blocking** (`exit 1`) — returned:
@@ -1842,7 +1842,7 @@ decisions" list.
 
 ## 21. `milestone.complete`'s accomplishment extraction grabs the first bolded run after the first heading, not a summary
 
-**Status:** FILED — filed upstream as [#3170](https://github.com/open-gsd/gsd-core/issues/3170)
+**Status:** CONFIRMED — filed upstream as [#3170](https://github.com/open-gsd/gsd-core/issues/3170)
 **Found:** 2026-08-06, DevFlow v2.4.0 milestone close (`milestone.complete "v2.4.0" --name "..."`).
 **Component:** `gsd-core/bin/lib/core-utils.cjs` (`extractOneLinerFromBody`), consumed by
 `gsd-core/bin/lib/milestone.cjs:563` and `gsd-core/bin/lib/commands.cjs:1245`.
@@ -1923,7 +1923,7 @@ real accomplishment. Done for v2.4.0 (`.planning/MILESTONES.md`, commit `ff4ebd0
 
 ## `state.record-session` mangles `milestone_name` when the ROADMAP heading carries a parenthetical
 
-**Status:** FILED — filed upstream as [#3171](https://github.com/open-gsd/gsd-core/issues/3171)
+**Status:** CONFIRMED — filed upstream as [#3171](https://github.com/open-gsd/gsd-core/issues/3171)
 
 **Found:** 2026-08-06, DevFlow, during `/gsd-discuss-phase 35`.
 
@@ -1992,7 +1992,7 @@ Done for Phase 35's context session.
 
 ## 22. `gsd-planner` emits `<automated>` acceptance commands it never executed — an unrunnable check reads as a verified one
 
-**Status:** FILED — filed upstream as [#3172](https://github.com/open-gsd/gsd-core/issues/3172)
+**Status:** APPROVED — filed upstream as [#3172](https://github.com/open-gsd/gsd-core/issues/3172)
 
 **Found:** 2026-08-07, DevFlow, during `/gsd-execute-phase 35`.
 **Severity: Medium** — not cosmetic. The defect is in the artifact that *defines* what "verified"
