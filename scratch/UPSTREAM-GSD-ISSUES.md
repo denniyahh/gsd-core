@@ -1162,7 +1162,7 @@ removed-line count of 0 against the backup.
 
 ## 15. Route 0's incomplete-phase predicate counts superseded plans, so fixing issue 14 will immediately start misrouting
 
-**Status:** FILED — filed upstream as [#3164](https://github.com/open-gsd/gsd-core/issues/3164)
+**Status:** DONE — resolved upstream by enhancement [#3180](https://github.com/open-gsd/gsd-core/issues/3180) (filed as [#3164](https://github.com/open-gsd/gsd-core/issues/3164))
 **Found:** 2026-08-03, DevFlow, running `/gsd:progress --next` twice in one session
 **Component:** `gsd-core/workflows/next.md` step `resume_incomplete_phase` (predicate at line 98,
 loop at line 121, success criterion at line 341)
@@ -1318,7 +1318,7 @@ for anyone else.
 
 ## 16. `milestone.complete`'s "no phases found → assume unscoped" degrade inherits issue 14's window truncation and converts it into a pass-all filter that archives every phase in the project, not just the milestone's own
 
-**Status:** CONFIRMED — filed upstream as [#3166](https://github.com/open-gsd/gsd-core/issues/3166)
+**Status:** DONE — resolved upstream by enhancement [#3180](https://github.com/open-gsd/gsd-core/issues/3180) (filed as [#3166](https://github.com/open-gsd/gsd-core/issues/3166))
 **Found:** 2026-08-04, DevFlow, running `/gsd-complete-milestone` for v2.3.0 (phases 30–31 only)
 **Component:** `gsd-core/src/roadmap-parser.cts` `getMilestonePhaseFilter` (pass-all degrade at
 line 715); consumed by `gsd-core/src/milestone.cts` `cmdMilestoneComplete` (phase-collection loop
@@ -1409,7 +1409,7 @@ several-hundred-line restructure cost.
 
 ## 17. `query progress` (`cmdProgressRender`) lists every `999.*` backlog directory as a phase of the current milestone — it has neither the sentinel filter nor the milestone-window scoping its sibling `roadmap.analyze` has
 
-**Status:** CONFIRMED — filed upstream as [#3167](https://github.com/open-gsd/gsd-core/issues/3167)
+**Status:** DONE — resolved upstream by enhancement [#3180](https://github.com/open-gsd/gsd-core/issues/3180) (filed as [#3167](https://github.com/open-gsd/gsd-core/issues/3167))
 **Found:** 2026-08-04, DevFlow, checking `gsd-tools` health after the v1.0/v2.0.0/v2.3.0
 retroactive milestone archival (prompted by an operator question about whether a related fix was
 complete)
@@ -1489,7 +1489,7 @@ what to work on next. No workaround applied — filed for the record only.
 
 ## 18. `buildPhaseCompletionProjection` requires `planCount > 0` to ever check verification, so a phase with zero plans is permanently reported `phase_complete: false` / `verification_status: "not_required"` even when a real, passing `*-VERIFICATION.md` exists
 
-**Status:** CONFIRMED — filed upstream as [#3168](https://github.com/open-gsd/gsd-core/issues/3168)
+**Status:** DONE — resolved upstream by enhancement [#3180](https://github.com/open-gsd/gsd-core/issues/3180) (filed as [#3168](https://github.com/open-gsd/gsd-core/issues/3168))
 **Found:** 2026-08-04, DevFlow, closing Phase 32 (`gsd-hygiene` milestone) — a docs-only phase
 whose goal was already satisfied by a prior write, so it deliberately went through
 `/gsd-discuss-phase` and a standalone verification with no `/gsd-plan-phase` / `/gsd-execute-phase`
