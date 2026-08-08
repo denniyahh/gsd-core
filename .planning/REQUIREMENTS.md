@@ -1,49 +1,45 @@
 # Requirements: GSD Core Contributions
 
-**Defined:** 2026-08-02
+**Defined:** 2026-08-04
+**Milestone:** v1.1 State Diagnostics
 **Core Value:** Every contribution must make GSD more reliable without regressing its supported runtime and generated-artifact contracts.
 
-## v1 Requirements
+## v1.1 Requirements
 
-### State Integrity
+### State Diagnostics
 
-- [x] **STATE-01**: A GSD project maintainer can run `state planned-phase` without stale same-date body prose overwriting authoritative `last_activity` or `last_activity_desc` frontmatter.
+- [x] **STATE-02**: A contributor running `state.validate` on the shipped `STATE.md` shape receives active-phase drift findings from disk; resolution reads `current_phase` frontmatter first, then the canonical `Phase:` prose field.
 
 ### Verification
 
-- [x] **QUALITY-01**: A contributor can verify STATE-01 through a focused command-level regression that asserts the final `STATE.md` frontmatter and preserves intentional planned-phase status, body, and plan-count behavior.
+- [x] **QUALITY-02**: A maintainer can verify STATE-02 through a focused regression test that proves the validator reports drift for that normal state-document shape.
 
-## v2 Requirements
+## Future Requirements
 
-### Effective Effort Configuration
-
-- **EFFORT-01**: A contributor can apply partial effort configuration without changing manifest tier defaults for unnamed agents.
-- **EFFORT-02**: A contributor can select Claude effort inheritance and get stable installed-agent frontmatter that omits `effort:` rather than writing an unsupported literal.
-- **EFFORT-03**: A contributor can distinguish configured policy, installed value, and runtime-effective or predicted effort in existing inspection output.
-- **EFFORT-04**: A contributor can read accurate documentation of model versus effort resolution, runtime differences, and explicit synchronization requirements.
+- **STATE-03**: A contributor can invoke a documented `state.verify-against-disk` command for an explicit state-versus-disk verification pass.
+- **PROGRESS-01**: A contributor receives a progress percentage that remains truthful when phase plan and summary counts do not correspond (ledger item 11).
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Ledger items 6 and 7 | Valid enhancements, but not part of this state-integrity milestone. |
-| Partial item-10 implementation | Its resolver, installer, reporting, and documentation changes must remain one coherent future slice. |
+| Item 11 progress percentage | Independent progress aggregation defect; excluded to keep the milestone a small validator repair. |
+| `state.verify-against-disk` command | Separate interface addition, not required to repair the existing validator. |
+| Broad `STATE.md` synchronization rewrite | This milestone repairs validator input resolution only. |
 | DevFlow orchestration | Explicitly paused by the project owner. |
-| Broad STATE.md synchronization rewrite | STATE-01 is a narrow preservation defect; broad ownership changes risk valid transition compatibility. |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| STATE-01 | Phase 1 | Complete |
-| QUALITY-01 | Phase 1 | Complete |
+| STATE-02 | Phase 2 | Complete |
+| QUALITY-02 | Phase 2 | Complete |
 
 **Coverage:**
 
-- v1 requirements: 2 total
+- v1.1 requirements: 2 total
 - Mapped to phases: 2
 - Unmapped: 0 ✓
 
 ---
-*Requirements defined: 2026-08-02*
-*Last updated: 2026-08-02 after initial scope selection*
+*Requirements defined: 2026-08-04*

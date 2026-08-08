@@ -2,36 +2,45 @@
 
 ## Overview
 
-This milestone delivers a narrowly scoped state-integrity repair: planning a phase retains the authoritative activity metadata already recorded in `STATE.md`, with a command-level regression that proves the final serialized state remains correct.
+Milestone v1.1 repairs the existing `state.validate` path so the shipped `STATE.md` shape resolves its active phase and reaches real on-disk drift comparison. The repair remains confined to ledger item 12 and includes focused regression coverage; item 11 and a new `state.verify-against-disk` command remain deferred.
+
+## Milestones
+
+- ✅ **v1.0 State Integrity** - Phase 1 shipped 2026-08-04; details are archived in [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md).
+- 🚧 **v1.1 State Diagnostics** - Phase 2 restores active-phase drift diagnostics through the existing validator.
 
 ## Phases
 
 **Phase Numbering:**
 
-- Integer phases are planned milestone work.
+- Integer phases are planned milestone work and continue across milestones.
 - Decimal phases are urgent insertions between planned phases.
 
-- [x] **Phase 1: Planned-Phase State Integrity** - Preserve authoritative activity metadata during planned-phase updates and prove it against the written `STATE.md` artifact. (completed 2026-08-04)
+### Milestone v1.1 — State Diagnostics
+
+- [ ] **Phase 2: State Validation Drift Diagnostics** - Resolve the active phase from shipped state metadata and prove that `state.validate` reports real disk drift.
 
 ## Phase Details
 
-### Phase 1: Planned-Phase State Integrity
+## Milestone v1.1 — State Diagnostics (Phase Details)
 
-**Goal**: GSD project maintainers can plan a phase without stale same-date body prose overwriting authoritative activity metadata in the resulting `STATE.md`.
-**Depends on**: Nothing (first phase)
-**Requirements**: STATE-01, QUALITY-01
+### Phase 2: State Validation Drift Diagnostics
+
+**Goal**: Contributors can rely on `state.validate` to resolve the active phase from a normal shipped `STATE.md` document and report drift against the corresponding phase artifacts on disk.
+**Depends on**: Phase 1
+**Requirements**: STATE-02, QUALITY-02
 **Success Criteria** (what must be TRUE):
 
-  1. A maintainer can run `state planned-phase` on a state file whose body has stale prose for the same date, and the final `STATE.md` frontmatter still contains the authoritative `last_activity` and `last_activity_desc` values.
-  2. The planned-phase update retains its intentional status, body/progress, and plan-count behavior while preserving those authoritative activity fields.
-  3. A contributor can run a focused command-level regression that reads the final `STATE.md` artifact and verifies both the preserved frontmatter and the intended planned-phase changes.
+  1. A contributor running `state.validate` with `current_phase` present in `STATE.md` frontmatter receives drift findings for that active phase's on-disk artifacts.
+  2. When `current_phase` is absent, the same validation resolves the canonical body `Phase:` field and still performs the on-disk drift checks; when both forms exist, frontmatter remains authoritative.
+  3. A maintainer can run a focused regression that uses the shipped state-document shape and proves the validator reaches and reports a known disk-drift condition.
 
-**Plans**: 1/1 plans complete
+**Plans**: 1/1 plans executed
 
-- [x] 01-01-PLAN.md
+- [x] 02-01-PLAN.md
 
 ## Progress
 
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 1. Planned-Phase State Integrity | 1/1 | Complete   | 2026-08-04 |
+| Phase | Milestone | Plans Complete | Status | Completed |
+|-------|-----------|----------------|--------|-----------|
+| 2. State Validation Drift Diagnostics | v1.1 | 1/1 | In Progress|  |
