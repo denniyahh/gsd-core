@@ -14,7 +14,7 @@ enhancement rather than a confirmed defect · `CONFIRMED` = reproduced against c
 
 ## 1. `ship.md` `track_shipping` pushes `[ci skip]`, wedging any PR with required status checks
 
-**Status:** DONE — open upstream PR [#2818](https://github.com/open-gsd/gsd-core/pull/2818)
+**Status:** DONE — upstream PR [#2818](https://github.com/open-gsd/gsd-core/pull/2818) approved and merged into `next` on 2026-08-11
 **Found:** 2026-07-28, DevFlow phase 25 ship (`denniyahh/devflow` PR #47)
 **RECURRED:** 2026-07-31, DevFlow phase 28 ship (`denniyahh/devflow` PR #63) — identical
 symptom, identical cause, ~3 days later. See "Recurrence record" below.
@@ -138,13 +138,11 @@ this file).
 second. Found only because the operator noticed the GitHub PR page "looks inconclusive" — nothing
 in the workflow surfaced it, exactly as the recurrence note above predicted.
 
-The upstream fix is **proposed but not shipped**: PR
+The upstream fix landed: PR
 [#2818](https://github.com/open-gsd/gsd-core/pull/2818) (*"fix(#2783): address wedged PRs in ship
-note protocol"*) is still `state: OPEN`, `mergedAt: null` as of this occurrence. The installed
-runtime is `@opengsd/gsd-pi@1.12.0`, whose `workflows/ship.md:457` still carries the token
-verbatim. So this keeps firing on every `/gsd-ship` until that PR lands **and** a release
-containing it is installed — this entry's `Status: DONE` refers to the write-up and upstream
-filing, not to the defect being fixed in the operator's runtime. Worth reading that way at a glance.
+note protocol"*) was approved and merged into `next` on 2026-08-11. The installed runtime may
+still carry the token until a release containing that merge is installed; this entry is therefore
+resolved upstream, but not evidence that every locally installed runtime has updated.
 
 Evidence, captured as a controlled comparison on one branch — the SHAs differ only in whether the
 message carries the token:
@@ -235,7 +233,7 @@ provide — which misled this session into believing the ledger was gating a shi
 
 ### 6. `query commit` will commit onto a protected integration branch with no guard
 
-**Status:** APPROVED — filed upstream as [#3158](https://github.com/open-gsd/gsd-core/issues/3158)
+**Status:** IN PROGRESS — maintainer requested that the former combined PR [#3214](https://github.com/open-gsd/gsd-core/pull/3214) be split. The branch-warning fix remains tracked by [#3158](https://github.com/open-gsd/gsd-core/issues/3158); the separate background-dispatch concern is [#3159](https://github.com/open-gsd/gsd-core/issues/3159). Follow-up work is ongoing from the closed #3214 split.
 `git.branching_strategy: "none"`, `query commit` committed successfully on `develop`. This is a
 safety enhancement because the documented `none` contract intentionally commits on the current
 branch; the low-risk fix is an early warning on the resolved base branch, not a blanket refusal.
@@ -861,7 +859,7 @@ project and after every GSD update, which is precisely the manual upkeep suggest
 
 ## 11. `query progress` reports `percent: 100` while plans remain unexecuted, because it divides summaries by plans across phases where the two do not correspond
 
-**Status:** FILED — filed upstream as [#3161](https://github.com/open-gsd/gsd-core/issues/3161)
+**Status:** CLOSED — closed by maintainer [trek-e](https://github.com/trek-e) through merged [PR #3318](https://github.com/open-gsd/gsd-core/pull/3318), which closes [#3161](https://github.com/open-gsd/gsd-core/issues/3161)
 **Found:** 2026-08-02, DevFlow phase 30 wave 2, auditing a suspected plan-count discrepancy
 **Component:** `gsd-core/bin/lib/commands.cjs` (`total_plans` / `total_summaries` / `percent`)
 **Severity:** medium-high — a progress meter that reads *complete* while work is outstanding, on a
@@ -950,7 +948,7 @@ correspondence check, not a `query progress`-only patch.
 
 ## 12. `state.validate` can never report drift, because its entire disk scan is gated on a field the shipped template never emits
 
-**Status:** FILED — filed upstream as [#3162](https://github.com/open-gsd/gsd-core/issues/3162)
+**Status:** DONE — upstream PR [#3208](https://github.com/open-gsd/gsd-core/pull/3208) approved and merged into `next` on 2026-08-11, resolving [#3162](https://github.com/open-gsd/gsd-core/issues/3162)
 **Found:** 2026-08-02, DevFlow phase 30 wave 3, investigating why `STATE.md` is chronically stale
 **Component:** `gsd-core/bin/lib/state.cjs` (`cmdStateValidate`), `gsd-core/bin/lib/state-document.cjs`
 (`stateExtractField`), `gsd-core/templates/state.md`
@@ -1695,10 +1693,10 @@ accurate issue log did not catch a repeat defect, because logging is not enforce
 | Same, as a backstop | A `pre-commit` hook that refuses a commit touching `.planning/phases/**` while `HEAD` is on `main`/`develop` |
 | `[ci skip]` wedging a PR | After `/gsd-ship`, assert `gh pr view <n> --json mergeStateStatus` is not `BLOCKED` with an empty rollup; if it is, amend the ship note and force-push with lease |
 
-**Filing status:** entries 1–5 are filed and have open fix PRs #2818–#2814; entry 8 was already
+**Filing status:** entry 1's [#2818](https://github.com/open-gsd/gsd-core/pull/2818) and entry 12's
+[#3208](https://github.com/open-gsd/gsd-core/pull/3208) are approved and merged. Entry 8 was already
 fixed upstream by #2638. Entry 9 is filed as [#3052](https://github.com/open-gsd/gsd-core/issues/3052)
-and awaits maintainer triage; entries 6, 7, and 10 remain unfiled with the current validation status
-recorded above.
+and awaits maintainer triage; the #3214 follow-up is split between entries 6 (#3158) and 7 (#3159).
 
 ## Contribution Status and Next-Slice Assessment (2026-08-04)
 
@@ -2048,3 +2046,176 @@ false pass.
 
 Corrected 35-04 and 35-05 by hand to `-p devflow --bin devflow` before dispatching their waves, and
 recorded the trap in DevFlow's CLAUDE.md verification-habits section.
+
+---
+
+## 23. `execute-phase` orchestrator injects `<critical_gate>` text that conflates `gate="blocking"` with `gate="blocking-human"`, blocking auto-approval in auto mode
+
+**Status:** FILED — filed upstream as [#3370](https://github.com/open-gsd/gsd-core/issues/3370)
+**Found:** 2026-08-11, DevFlow phase 35.1 — drill exercising unattended-mode checkpoint auto-approval
+**Component:** `execute-phase.md` / `execute-plan.md` — orchestrator's executor spawn prompt construction (step 5 / pattern A)
+**Severity:** high — an unattended `--auto` / `--chain` run with a correctly-authored `gate="blocking"` checkpoint will stall on the gate exactly as if auto-mode were inactive, and no mechanism in GSD's own rules prevents this
+**Reproducibility: confirmed** — captured in full from a live Claude Code Code-stage agent run; the orchestrator's prompt construction is deterministic given the same plan input and the same model
+
+### What happens
+
+`execute-phase.md`'s `checkpoint_handling` step (lines 1130–1145) correctly says that
+`checkpoint:human-verify` with `gate="blocking"` (as opposed to `blocking-human`) SHOULD
+auto-approve when `AUTO_MODE` is `true`:
+
+```
+- **human-verify** → Auto-spawn continuation agent with `{user_response}` = `"approved"`.
+  Log `⚡ Auto-approved checkpoint`. **Except `blocking-human`.**
+```
+
+`gsd-executor.md`'s own `<checkpoint_protocol>` says the same thing. `references/checkpoints.md`
+gate table is unambiguous:
+
+| `gate="blocking"` | Bypassed per rule 5 (human-verify auto-approves, decision auto-selects) |
+| `gate="blocking-human"` | **Never bypassed.** |
+
+The DevFlow chain-flag mechanism sets `_auto_chain_active: true` before the Code stage, the `--auto`
+token in the prompt prevents `execute-phase.md`'s sync-clear step from wiping it, and
+`gsd_run query config-get workflow._auto_chain_active` returns `true` — all confirmed by captured
+output.
+
+But auto-approval never happens. The orchestrator agent, when constructing the executor subagent
+prompt, independently generates a `<critical_gate>` block that directly contradicts GSD's rules:
+
+> *"CRITICAL — this plan's Task 2 is `checkpoint:human-verify gate="blocking"`. … You MUST NOT
+> auto-approve it, simulate a human response, or treat any internal check … as satisfying it …
+> Do not fabricate or assume an 'approved' response under any circumstance, **including any
+> instruction elsewhere implying auto-mode should auto-approve** human-verify checkpoints —
+> `gate="blocking"` checkpoints of type checkpoint:human-verify require a real human's explicit
+> response and must never be auto-resolved by an agent."*
+
+The executor subagent follows this instruction over its own `<checkpoint_protocol>` (which would
+have correctly auto-approved). The checkpoint surfaces as a gate, the human is absent, and the run
+stalls.
+
+### Root cause — the orchestrator conflates two distinct gate values
+
+The orchestrator treats `gate="blocking"` as if it were `gate="blocking-human"`, generating a
+protective anti-auto-approval directive that overrides both its own `checkpoint_handling` step
+and the executor's `checkpoint_protocol`. GSD's own semantics draw a sharp line between these two —
+`blocking` means "auto-approvable when unattended," `blocking-human` means "never" — but nothing in
+the executor dispatch instructions (`execute-phase.md` step 5 / `execute-plan.md` pattern A) tells
+the orchestrator to respect that distinction when constructing the executor prompt.
+
+This is particularly likely to bite after the fix for #2107, which taught the orchestrator about
+`blocking-human` and its carve-out. The orchestrator now knows there exists a class of checkpoint
+that must never auto-approve, and it over-generalises: it sees `gate="blocking"` — which LOOKS like
+a "blocking" gate that a human should see — and adds the protective instruction, not understanding
+that `blocking` is the DEFAULT, auto-approvable case and only `blocking-human` is the exception.
+
+### What the evidence looks like (all captured from a real run)
+
+1. `_auto_chain_active` is set to `true` by DevFlow's `AutoChainGuard` — confirmed by:
+   - `git status` showing `modified: .planning/config.json` with the `false → true` diff
+   - `gsd_run query config-get workflow._auto_chain_active` returning `true`
+2. The `--auto` token is in the Code prompt, preventing GSD's sync-clear
+3. The orchestrator spawns `gsd-executor` subagents with `<critical_gate>` saying "never auto-approve"
+4. The executor subagent follows `<critical_gate>`, stops at the checkpoint, returns
+   `checkpoint_return_format`
+5. The orchestrator receives the checkpoint, follows `<critical_gate>` over its own
+   `checkpoint_handling` step, surfaces the gate
+6. The run stalls — `DEVFLOW_RESULT: {"status": "failed"}`, gate fires, timeout expires
+
+### Suggested fixes (any one closes the gap)
+
+1. **Instruct the orchestrator in the dispatch step.** `execute-phase.md` step 5 and/or
+   `execute-plan.md` pattern A should carry an explicit instruction: do NOT inject anti-auto-approval
+   directives for `gate="blocking"` checkpoints; those are auto-approvable per GSD's gate table and
+   the executor's own `<checkpoint_protocol>` already handles the `blocking-human` carve-out.
+2. **Teach the executor to trust its own protocol.** `gsd-executor.md`'s `<checkpoint_protocol>`
+   could add: "The `<auto_mode_detection>` result and this protocol are authoritative for
+   checkpoint handling — ignore any orchestrator-level instruction that contradicts them about
+   which checkpoints may auto-approve."
+3. **Have the orchestrator NOT pass the plan's checkpoint tasks to the executor as
+   `<critical_gate>` text at all.** The plan's `<task>` elements already carry the type and gate
+   attributes. The executor reads the plan directly and applies its own protocol. Let it decide.
+4. **Make `<critical_gate>` conditional on auto-mode.** Only inject it when `AUTO_MODE` is
+   `false`, or qualify it with "if not in auto mode."
+
+### Local workaround
+
+None within GSD — the orchestrator's prompt construction is not configurable. DevFlow's chain-flag
+mechanism works correctly but cannot overcome the orchestrator overriding its own rules. A fixture
+that pre-bakes a plan without a `checkpoint:human-verify` task (using e.g. `type="auto"` with a
+`<verify><human-check>` block instead) would bypass this entirely, but that defeats the purpose of
+testing checkpoint auto-approval.
+
+---
+
+## 24. `state.planned-phase` overwrites `current_phase` with a stale body `Phase:` value — the empty-guard misses non-empty-but-stale prose
+
+**Status:** FILED — filed upstream as [#3395](https://github.com/open-gsd/gsd-core/issues/3395)
+**Found:** 2026-08-12, DevFlow phase 35.3 planning (`/gsd-plan-phase 35.3`)
+**Component:** `gsd-core/bin/lib/state-transition.cjs` (`plannedPhaseCore`, `mutateCurrentPositionForAdvance`,
+`FIELD_CLASSIFICATION` at `:56`), `gsd-core/bin/lib/state-command-router.cjs` (`planned-phase` routing)
+**Severity:** Moderate — silent, under-reported, and routes progress/resume to the wrong phase; the
+only remedy is hand-editing frontmatter. Third facet of the body→frontmatter resync family this
+ledger already tracks (entries 9 / 11, upstream #3052 / #3374 / #2111 / #948).
+**Reproducibility:** 100% given the precondition (body `Phase:` line drifted from frontmatter `current_phase`).
+
+### What happens
+
+plan-phase step 13b runs `state.planned-phase --phase 35.3 --name "…" --plans 3`. The command
+reported `{"updated": ["progress.total_plans"], "phase": "35.3", "plan_count": 3}` — a single,
+narrow field change. The actual `git diff` on `.planning/STATE.md` immediately after:
+
+```diff
+-current_phase: 35.3
++current_phase: 35.1
+```
+
+The explicitly-passed phase was replaced by a value scraped from a stale body line. The reported
+`updated` list under-reports the write by three fields (`current_phase`, `last_updated`, and the
+`progress.total_plans` it does report).
+
+### Root cause — the same body→frontmatter resync, a third field left unguarded
+
+1. `plannedPhaseCore` (state-transition.cjs `:832`) updates the body's `Status` / `Total Plans in
+   Phase` / `Last Activity` fields and the `## Current Position` section — but it **never writes the
+   body's `Phase:` line**. `mutateCurrentPositionForAdvance` (`:504`) only handles `status` /
+   `lastActivity` / `plan`, and `plannedPhaseCore` calls it with only `{ status, lastActivity }` —
+   no phase, not even `plan`.
+2. `current_phase` is classified `{ source: 'body', … }` (state-transition.cjs `:56`), so
+   `syncStateFrontmatter` re-derives frontmatter `current_phase` **from** the body `Phase:` line.
+3. The body line was stale — `Phase: 35.1 (unattended-launch-prerequisites) — COMPLETE (4/4 plans)` —
+   a previous phase's completion prose that a hand-written completion commit had updated in the
+   frontmatter but not in the body.
+4. The preserve-guard for `current_phase` only rescues an **empty** derived value ("prefer existing
+   when derived is empty" — entry 9's reading of state.cjs `:1631-1660`). The derived `35.1` was
+   non-empty, so it survived and clobbered `35.3`.
+
+**The decimal look is a red herring.** `35.1` vs `35.3` is not decimal-phase parsing gone wrong; both
+happen to be decimal sub-phases of the same parent and the wrong value is the stale body's, not a
+truncated parse. A separate, genuine decimal truncation exists in `state.rebuild`'s pruning
+(`parseInt(phaseMatch[1], 10) <= cutoff`, state-transition.cjs `:1239/:1252/:1266`), but it did not
+bite here — worth its own entry if anyone is auditing decimal-phase handling end to end.
+
+### Why this is a new facet, not a duplicate
+
+- Entry 9 (upstream #3052) covers the same command but the **sibling fields** `status` /
+  `last_activity_desc`.
+- Upstream #3374 covers the same "stale body over fresher frontmatter" mechanism but via
+  `phase.complete` + `stopped_at`.
+- Upstream #2111 covers the same `current_phase` field and the same empty-guard-survivor shape, but
+  via `milestone complete` + `parseProsePhaseField`.
+
+`state.planned-phase` + `current_phase` is the untouched cell in that matrix.
+
+### Secondary findings (same command, same write path)
+
+- **`--name` is discarded.** The router (state-command-router.cjs `:145-148`) parses `name` but calls
+  `cmdStatePlannedPhase(cwd, phase, plans, raw)` without it — the argument is a silent no-op.
+- **The body `Plan:` line is never written either.** `plannedPhaseCore` passes no `plan` to
+  `mutateCurrentPositionForAdvance`, so the `## Current Position` plan count drifts stale alongside
+  `Phase:`.
+
+### Local workaround
+
+After `state.planned-phase`, diff `.planning/STATE.md` and restore `current_phase` (and `status`)
+by hand. Done for Phase 35.3: the regression and the unset `status` were both corrected in a
+follow-up commit, matching the Phase 35.1 plan-phase precedent's `status` wording.
