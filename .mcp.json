@@ -1,0 +1,34 @@
+{
+  "mcpServers": {
+    "gsd-workflow": {
+      "command": "/var/home/linuxbrew/.linuxbrew/Cellar/node/26.7.0/bin/node",
+      "args": [
+        "/var/home/linuxbrew/.linuxbrew/lib/node_modules/@opengsd/gsd-pi/packages/mcp-server/dist/cli.js"
+      ],
+      "cwd": "/var/home/denniyahh/Github/gsd-core-personal-workspace",
+      "env": {
+        "GSD_CLI_PATH": "/home/linuxbrew/.linuxbrew/bin/gsd",
+        "GSD_BIN_PATH": "/home/linuxbrew/.linuxbrew/bin/gsd",
+        "GSD_WORKFLOW_EXECUTORS_MODULE": "/var/home/denniyahh/.gsd/agent/extensions/gsd/tools/workflow-tool-executors.js",
+        "GSD_WORKFLOW_WRITE_GATE_MODULE": "/var/home/denniyahh/.gsd/agent/extensions/gsd/bootstrap/write-gate.js",
+        "GSD_PERSIST_WRITE_GATE_STATE": "1",
+        "GSD_WORKFLOW_PROJECT_ROOT": "/var/home/denniyahh/Github/gsd-core-personal-workspace"
+      }
+    },
+    "gsd-browser": {
+      "command": "gsd-browser",
+      "args": [
+        "mcp",
+        "--session",
+        "gsd-gsd-core-personal-workspace-e037b27a",
+        "--identity-scope",
+        "project",
+        "--identity-key",
+        "gsd-gsd-core-personal-workspace-e037b27a",
+        "--identity-project",
+        "gsd-gsd-core-personal-workspace-e037b27a"
+      ],
+      "cwd": "/var/home/denniyahh/Github/gsd-core-personal-workspace"
+    }
+  }
+}
