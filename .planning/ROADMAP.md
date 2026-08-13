@@ -8,6 +8,7 @@ Milestone v1.1 repairs the existing `state.validate` path so the shipped `STATE.
 
 - ✅ **v1.0 State Integrity** - Phase 1 shipped 2026-08-04; details are archived in [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md).
 - 🚧 **v1.1 State Diagnostics** - Phase 2 restores active-phase drift diagnostics through the existing validator.
+- 🚧 **v1.2 Executor Safety** - Phase 3 introduces execution guards for branch protection and one-shot agent lifetimes.
 
 ## Phases
 
@@ -19,6 +20,10 @@ Milestone v1.1 repairs the existing `state.validate` path so the shipped `STATE.
 ### Milestone v1.1 — State Diagnostics
 
 - [ ] **Phase 2: State Validation Drift Diagnostics** - Resolve the active phase from shipped state metadata and prove that `state.validate` reports real disk drift.
+
+### Milestone v1.2 — Executor Safety
+
+- [ ] **Phase 3: Executor Safety and Branching Guard** - Prevent accidental commits to integration branches and support one-shot executors.
 
 ## Phase Details
 
@@ -39,8 +44,23 @@ Milestone v1.1 repairs the existing `state.validate` path so the shipped `STATE.
 
 - [x] 02-01-PLAN.md
 
+## Milestone v1.2 — Executor Safety (Phase Details)
+
+### Phase 3: Executor Safety and Branching Guard
+
+**Goal**: Ensure `query commit` warns/fails when attempting to commit to protected integration branches, and allow `execute-phase` to opt out of background execution for runtimes with one-shot session lifetimes.
+**Depends on**: N/A
+**Requirements**: 
+**Success Criteria** (what must be TRUE):
+
+  1. A contributor running `query commit` with `branching_strategy` unset warns or fails before committing directly to `main` or `develop`.
+  2. `execute-phase.md` provides an opt-out mechanism for running executors in the background, allowing safe completion on one-shot runtimes.
+
+**Plans**: 0/0 plans executed
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 2. State Validation Drift Diagnostics | v1.1 | 1/1 | In Progress|  |
+| 3. Executor Safety and Branching Guard | v1.2 | 0/0 | Not Started|  |
