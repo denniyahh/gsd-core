@@ -16,12 +16,16 @@ fi
 # Ensure remote directory exists
 ssh "$REMOTE" "mkdir -p $REMOTE_DIR ~/.cache"
 
-# Fast LAN rsync of repo + git metadata (excluding node_modules, local caches, and .local)
+# Fast LAN rsync of repo + git metadata (protecting remote build artifacts from deletion)
 rsync -a --delete \
-  --exclude 'node_modules' \
-  --exclude '.local' \
-  --exclude '.cache' \
-  --exclude '*.tsbuildinfo' \
+  --filter='P /node_modules' \
+  --filter='P /gsd-core/bin/lib' \
+  --filter='P /.cache' \
+  --filter='P /*.tsbuildinfo' \
+  --filter='- /node_modules' \
+  --filter='- /.local' \
+  --filter='- /.cache' \
+  --filter='- /*.tsbuildinfo' \
   "$LOCAL_ROOT/" "$REMOTE:$REMOTE_DIR/"
 
 # Compute local package-lock.json hash
@@ -43,7 +47,13 @@ ssh -t "$REMOTE" "zsh -lc '
   if [ ! -d node_modules ] || [ ! -f \"\$CACHED_HASH_FILE\" ] || [ \"\$(cat \"\$CACHED_HASH_FILE\")\" != \"\$CURRENT_HASH\" ]; then
     echo \"🔄 Lockfile change or clean install detected. Running npm ci on Mac...\"
     mise exec -- npm ci --silent
+    rm -f tsconfig.build.tsbuildinfo
+    mise exec -- npm run build:lib --silent
     echo \"\$CURRENT_HASH\" > \"\$CACHED_HASH_FILE\"
+  fi
+
+  if [ ! -d gsd-core/bin/lib ] || [ -z \"\$(ls -A gsd-core/bin/lib 2>/dev/null)\" ]; then
+    mise exec -- npm run build:lib --silent
   fi
 
   echo \"🚀 Running CI command on Mac: $COMMAND\"
