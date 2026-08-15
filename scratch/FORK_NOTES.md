@@ -5,21 +5,20 @@
 * `upstream` -> `https://github.com/open-gsd/gsd-core.git` (Official GSD Core)
 
 ## Common Commands (`mise` Tasks)
-* **Start New Branch**: `mise run start <type> <issue-number> <slug>`
-  * Example: `mise run start fix 2783 wedged-pr-note`
-  * Automates: Checkout `next` -> Pull `upstream/next` -> Create branch -> Run `npm run check:env` -> Output next steps.
+* **Start New Worktree**: `mise run start:wt <type> <issue-number> <slug>`
+  * Example: `mise run start:wt fix 2783 wedged-pr-note`
+  * Automates: Fetch `upstream/next` -> Create isolated worktree -> Populate `mise.toml`, `scratch/ci-mac.sh`, and `.agents/` -> Ready for Mac CI testing.
 * **Sync Integration Branch**: `mise run sync` (syncs `next` with `upstream/next`)
-* **Run Pre-flight Checks**: `mise run check` (env check + build + unit tests + lint)
+* **Run Pre-flight Checks**: `mise run check` (runs env check + build + unit tests + lint on Mac CI runner)
+* **Run Specific Tests on Mac**: `mise run test:mac` or `./scratch/ci-mac.sh "node scripts/run-tests.cjs --suite unit"`
 * **Create PR**: `mise run pr` (opens PR targeting `upstream/next`)
 
 ## AI-Assisted Contribution Flow
 
-`mise run start` is convenient for a manual branch, but it creates that branch in this
-primary checkout. Project standards require agent-written work to use an isolated worktree.
+Project standards require agent-written work to use an isolated worktree created with `mise run start:wt`:
 
 ```fish
-mise run sync
-git worktree add -b fix/<issue>-<slug> ../gsd-core-<slug> upstream/next
+mise run start:wt fix <issue> <slug>
 cd ../gsd-core-<slug>
 mise run check
 git push -u origin HEAD
