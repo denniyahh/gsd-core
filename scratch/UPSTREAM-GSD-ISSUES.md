@@ -1078,7 +1078,7 @@ than behind logic that's merely incomplete.
 
 ## 13. `phase.add` inserts the new phase at the file's last `---`, which on a long roadmap is nowhere near the phase list
 
-**Status:** CONFIRMED — filed upstream as [#3163](https://github.com/open-gsd/gsd-core/issues/3163)
+**Status:** DONE — closed upstream as [#3163](https://github.com/open-gsd/gsd-core/issues/3163)
 **Found:** 2026-08-03, DevFlow phase 31 creation (`/gsd:phase`)
 **Component:** `gsd-core/src/phase.cts`, `cmdPhaseAdd` (line 882) and `cmdPhaseAddBatch` (line 970)
 **Severity:** medium — silently files the new phase inside unrelated (often historical) prose. No
@@ -1230,7 +1230,7 @@ rather than merely quieting.
 
 ## 14. `roadmap.analyze` reports `phase_count: 0` with no error while phase directories exist on disk, silently disarming `/gsd:progress --next`'s resume gate
 
-**Status:** FILED — filed upstream as [#3165](https://github.com/open-gsd/gsd-core/issues/3165)
+**Status:** DONE — closed upstream as [#3165](https://github.com/open-gsd/gsd-core/issues/3165)
 **Found:** 2026-08-03, DevFlow (pre-existing; confirmed present before and after an unrelated edit)
 **Component:** `gsd-core/src/roadmap.cts` `cmdRoadmapAnalyze` → `roadmap-parser.cts`
 `extractCurrentMilestone` (section-end scan, lines 178-193)
@@ -1757,7 +1757,7 @@ Update `Status:` and record the issue link when each entry is filed upstream.*
 
 ## 20. `parseDecisions`' parse-miss guard fires on a *cross-reference* to another decision, and a single miss zeroes the whole coverage analysis — blocking `/gsd-plan-phase` on a phase whose decisions are in fact 15/15 covered
 
-**Status:** CONFIRMED — filed upstream as [#3169](https://github.com/open-gsd/gsd-core/issues/3169)
+**Status:** DONE — closed upstream as [#3169](https://github.com/open-gsd/gsd-core/issues/3169)
 
 Found 2026-08-05 during DevFlow Phase 34 planning. `/gsd-plan-phase 34`'s §13a Decision Coverage
 Gate — which is **blocking** (`exit 1`) — returned:
@@ -1840,7 +1840,7 @@ decisions" list.
 
 ## 21. `milestone.complete`'s accomplishment extraction grabs the first bolded run after the first heading, not a summary
 
-**Status:** CONFIRMED — filed upstream as [#3170](https://github.com/open-gsd/gsd-core/issues/3170)
+**Status:** DONE — closed upstream as [#3170](https://github.com/open-gsd/gsd-core/issues/3170)
 **Found:** 2026-08-06, DevFlow v2.4.0 milestone close (`milestone.complete "v2.4.0" --name "..."`).
 **Component:** `gsd-core/bin/lib/core-utils.cjs` (`extractOneLinerFromBody`), consumed by
 `gsd-core/bin/lib/milestone.cjs:563` and `gsd-core/bin/lib/commands.cjs:1245`.
@@ -1921,7 +1921,7 @@ real accomplishment. Done for v2.4.0 (`.planning/MILESTONES.md`, commit `ff4ebd0
 
 ## `state.record-session` mangles `milestone_name` when the ROADMAP heading carries a parenthetical
 
-**Status:** CONFIRMED — filed upstream as [#3171](https://github.com/open-gsd/gsd-core/issues/3171)
+**Status:** DONE — closed upstream as [#3171](https://github.com/open-gsd/gsd-core/issues/3171)
 
 **Found:** 2026-08-06, DevFlow, during `/gsd-discuss-phase 35`.
 
@@ -2051,7 +2051,7 @@ recorded the trap in DevFlow's CLAUDE.md verification-habits section.
 
 ## 23. `execute-phase` orchestrator injects `<critical_gate>` text that conflates `gate="blocking"` with `gate="blocking-human"`, blocking auto-approval in auto mode
 
-**Status:** FILED — filed upstream as [#3370](https://github.com/open-gsd/gsd-core/issues/3370)
+**Status:** DONE — closed upstream as [#3370](https://github.com/open-gsd/gsd-core/issues/3370)
 **Found:** 2026-08-11, DevFlow phase 35.1 — drill exercising unattended-mode checkpoint auto-approval
 **Component:** `execute-phase.md` / `execute-plan.md` — orchestrator's executor spawn prompt construction (step 5 / pattern A)
 **Severity:** high — an unattended `--auto` / `--chain` run with a correctly-authored `gate="blocking"` checkpoint will stall on the gate exactly as if auto-mode were inactive, and no mechanism in GSD's own rules prevents this
@@ -2149,7 +2149,7 @@ testing checkpoint auto-approval.
 
 ## 24. `state.planned-phase` overwrites `current_phase` with a stale body `Phase:` value — the empty-guard misses non-empty-but-stale prose
 
-**Status:** FILED — filed upstream as [#3395](https://github.com/open-gsd/gsd-core/issues/3395)
+**Status:** DONE — closed upstream as [#3395](https://github.com/open-gsd/gsd-core/issues/3395) (reproduced, root caused, and fixed in `fix/3395-bug-state-state-planned-phase-overwrites`)
 **Found:** 2026-08-12, DevFlow phase 35.3 planning (`/gsd-plan-phase 35.3`)
 **Component:** `gsd-core/bin/lib/state-transition.cjs` (`plannedPhaseCore`, `mutateCurrentPositionForAdvance`,
 `FIELD_CLASSIFICATION` at `:56`), `gsd-core/bin/lib/state-command-router.cjs` (`planned-phase` routing)
