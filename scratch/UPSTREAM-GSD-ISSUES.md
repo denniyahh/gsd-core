@@ -2219,3 +2219,54 @@ bite here — worth its own entry if anyone is auditing decimal-phase handling e
 After `state.planned-phase`, diff `.planning/STATE.md` and restore `current_phase` (and `status`)
 by hand. Done for Phase 35.3: the regression and the unset `status` were both corrected in a
 follow-up commit, matching the Phase 35.1 plan-phase precedent's `status` wording.
+
+---
+
+## 25. `state.update-progress` returns "Progress field not found" for a STATE.md whose counters live only in the frontmatter
+
+**Found:** 2026-08-15, DevFlow phase 36 (a Pi-driven manual GSD run), while auditing why STATE.md
+never updates.
+**Component:** `gsd-core/bin/lib/state.cjs` (`cmdStateUpdateProgress`, the `Progress:` body-line match)
+**Severity:** medium — the progress-update verb silently no-ops and misreports on any project whose
+STATE.md carries the progress counters in the YAML frontmatter `progress:` block rather than a body
+`Progress:` line.
+**Reproducibility: confirmed**, deterministic.
+
+### What happens
+
+```
+$ gsd_run query state.update-progress
+{"updated": false, "reason": "Progress field not found in STATE.md"}
+```
+
+even though DevFlow's `.planning/STATE.md` has a `progress:` frontmatter block carrying
+`total_phases` / `completed_phases` / `total_plans` / `completed_plans` / `percent`. The verb updates
+nothing.
+
+### Root cause
+
+`cmdStateUpdateProgress` matches a body `Progress:` line — `**Progress:**` (bold) or `Progress:`
+(plain) — and returns "Progress field not found" when neither is present. It deliberately skips the
+frontmatter `progress:` key (the `#2177` comment: "match against the BODY only"), on the assumption
+that a body `Progress:` line exists to be updated and the frontmatter `percent` is re-derived from it
+on every write. DevFlow's STATE.md has **no body `Progress:` line** — the counters live only in the
+frontmatter — so the verb has nothing to match and no-ops.
+
+This is the same body/frontmatter split as entry **9** (`buildStateFrontmatter` reconstructs the
+frontmatter from body prose) and entry **12** (`state.validate` gated on a body `Current Phase`
+line): GSD's state verbs assume a body field that DevFlow's STATE.md template never emitted.
+
+### Suggested fixes (either is sufficient)
+
+1. When no body `Progress:` line exists but the frontmatter `progress:` block does, update the
+   frontmatter `percent` in place instead of returning "not found" — making the verb correct for
+   frontmatter-only templates.
+2. Or return a *distinct, honest* signal ("no body `Progress:` line — frontmatter-only template")
+   rather than the misleading "Progress field not found", so a caller isn't told the field is
+   missing when it is merely in a different location.
+
+### Local workaround
+
+None reliable — DevFlow's progress counters are maintained by hand until a body `Progress:` line is
+added to STATE.md (or the verb learns the frontmatter fallback). See entries 9 and 12 for the
+adjacent body-prose assumptions.
