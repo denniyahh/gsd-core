@@ -12,11 +12,12 @@
 * **Remote CI Runner**: Pre-flight verification routes automatically to the local Mac runner via `mise run check` / `scratch/ci-mac.sh`.
 * **Branch & Worktree Setup Helper**: Use `mise run start:wt <type> <issue-number> <slug>` (e.g. `mise run start:wt fix 2783 wedged-pr-note`) to create task worktrees off `upstream/next` populated with personal workflow capabilities.
 * **Pre-flight & Pre-push Commands (STRICT ENFORCEMENT)**:
-  * Check environment: `mise run check` (or `npm run check:env`)
+  * Check environment & workflow budgets: `mise run check:budget` (checks ADR-857 `execute-phase.md` ≤ 93,400 bytes, `plan-phase.md` ≤ 94,519 bytes, and drift acks)
   * Full build: `npm run build` (or `npm run build:lib`)
   * Run CI linter: `npm run lint:ci`
   * Run unit tests: `npm test`
-  * **Rule**: You MUST run `npm run build && npm run lint:ci && npm test` (or `mise run check`) before pushing to `origin`.
+  * **Rule**: You MUST run `mise run check:budget && npm run build && npm run lint:ci && npm test` (or `mise run check`) before pushing to `origin`.
+  * **Workflow Size Ceiling & Delegation Rule**: When modifying host workflows (`execute-phase.md`, `plan-phase.md`), delegate multi-line logic to step fragments (`gsd-core/workflows/<workflow>/steps/*.md` or `capabilities/*/fragments/`) and keep `execute-phase.md` LF byte count strictly ≤ 93,400 bytes.
 
 ## 3. Worktree-Safe Contribution Flow
 * **Sync, then isolate**: Run `mise run sync` in this primary checkout. For AI-assisted work, create the task branch in a separate worktree via `mise run start:wt <type> <issue-number> <slug>`.
@@ -24,6 +25,28 @@
 * **Publishing**: Push task branches to `origin`; open the upstream PR only after the approved issue, required test evidence, changeset (when applicable), and PR template are ready.
 * **Personal-fork files**: `.agents/`, `mise.toml`, and `scratch/` are personal workflow material. They may be committed to `denniyahh/gsd-core`, but must be excluded from PRs to `open-gsd/gsd-core` unless their content is explicitly in scope.
 * **Local state**: Never stage `.local/`; it is intentionally locally ignored and can contain machine-specific GitHub state.
+
+### Contribution Boundary Automation
+
+The `start:wt` helper always bases contribution branches on `upstream/next`; do not branch an
+upstream contribution from `personal/workspace`, whose private commits would otherwise enter the
+PR ancestry. The helper then injects personal tooling into the new worktree and installs a
+worktree-local hook path, preserving the upstream hooks while adding the personal checks.
+
+The pre-push hook rejects any committed path under `.agents/`, `.planning/`, or `scratch/`, plus
+`mise.toml`, when compared with `upstream/next`. These files are development capabilities and
+planning state, not upstream contribution files. Do not bypass the hook with `--no-verify`.
+
+Before pushing, inspect the exact PR surface with:
+
+```bash
+git diff --name-only upstream/next...HEAD
+git diff --check upstream/next...HEAD
+```
+
+If a private customization needs to change during development, edit it in the injected worktree
+but stage only the intended upstream files. The helper's publish guard is the final safety net,
+not a substitute for reviewing the staged diff.
 
 ## 4. Reference Notes
 * See [scratch/FORK_NOTES.md](file:///home/denniyahh/Github/gsd-core/scratch/FORK_NOTES.md) for local environment notes and shortcuts.
