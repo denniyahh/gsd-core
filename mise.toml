@@ -13,9 +13,13 @@ run = "./scratch/ci-mac.sh npm run check:env && ./scratch/ci-mac.sh npm run buil
 description = "Run test suite remotely on Mac"
 run = "./scratch/ci-mac.sh npm test"
 
+[tasks."check:budget"]
+description = "Verify workflow byte budgets (ADR-857 Phase 6 ceilings) and drift acks"
+run = "./scratch/check-workflow-budgets.sh"
+
 [tasks.check]
-description = "Pre-flight CI checks (routed to Mac runner)"
-run = "./scratch/ci-mac.sh"
+description = "Pre-flight CI checks (routed to Mac runner with budget check)"
+run = "./scratch/check-workflow-budgets.sh && ./scratch/ci-mac.sh"
 
 [tasks.sync]
 description = "Sync with upstream/next"

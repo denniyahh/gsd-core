@@ -13,6 +13,31 @@
 * **Run Specific Tests on Mac**: `mise run test:mac` or `./scratch/ci-mac.sh "node scripts/run-tests.cjs --suite unit"`
 * **Create PR**: `mise run pr` (opens PR targeting `upstream/next`)
 
+## Contribution Isolation Contract
+
+AI agents and human contributors must create contribution branches from `upstream/next`, not
+from `personal/workspace`. The personal branch contains private workflow commits and may have
+local edits that must never appear in an upstream PR.
+
+Use `mise run start:wt <type> <issue> <slug>`. The helper creates a clean branch from the
+latest `upstream/next`, injects the personal `.agents/`, `mise.toml`, and `scratch/` tooling,
+and installs worktree-local hooks. The injected files are development capabilities, not
+contribution files.
+
+Commit only the requested upstream change. The worktree pre-push hook runs the upstream hook,
+workflow-budget checks, and a publish-boundary check that rejects `.agents/`, `.planning/`,
+`mise.toml`, and `scratch/` from the PR diff. Do not bypass that guard with `--no-verify`.
+
+Before pushing, inspect the exact contribution surface:
+
+```bash
+git diff --name-only upstream/next...HEAD
+git diff --check upstream/next...HEAD
+```
+
+If a private file is accidentally committed, remove it from the contribution history before
+opening the PR; do not merge `personal/workspace` into the feature branch as a shortcut.
+
 ## AI-Assisted Contribution Flow
 
 Project standards require agent-written work to use an isolated worktree created with `mise run start:wt`:
