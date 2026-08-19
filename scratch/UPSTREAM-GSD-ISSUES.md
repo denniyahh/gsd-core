@@ -2334,3 +2334,67 @@ each table entry an isolated fake home instead of relying on real `os.homedir()`
 None needed — this doesn't affect CI (GitHub Actions runners start with an empty `$HOME`) or the
 `#3552` branch's own tests; only surfaces when running `npm test` directly on a machine that has the
 real Antigravity CLI installed. Safe to ignore for any work not touching this test file.
+
+---
+
+## 27. `resolveFallowBinary` PATH/`node_modules/.bin` resolution tests flake on the `windows-latest` CI shard, independent of any code change
+
+**Status:** READY — written up, not yet filed
+**Found:** 2026-08-19, triaging a failed `full test (windows-latest, 24, shard 1/3)` check on PR
+[#3648](https://github.com/open-gsd/gsd-core/pull/3648) (`#3552`, protected-branch-warnings — a
+config/docs-only PR with no relation to `fallow` or PATH resolution).
+**Component:** `tests/config-schema.property.test.cjs` (`feat-3210: fallow integration module` →
+`falls back to node_modules/.bin/fallow when PATH does not contain fallow` at `:742`,
+`ignores non-executable PATH candidate on non-Windows; prefers .cmd over bare extensionless on
+Windows` at `:760`, `feat-3210: M2 - node_modules/.bin resolution order` →
+`resolveFallowBinary prefers node_modules/.bin over PATH when both exist` at `:912`), exercising
+`resolveFallowBinary`'s `node_modules/.bin`-vs-`PATH` lookup.
+**Severity:** medium — blocks the "Required tests" merge gate on `windows-latest` CI for any PR,
+unrelated to what the PR actually touches; wastes reviewer time re-running or needing an override.
+**Reproducibility: confirmed, non-deterministic** — same 3 assertions fail identically on `next`'s
+own tip commit with zero code changes ([run 32183555267](https://github.com/open-gsd/gsd-core/actions/runs/32183555267),
+`windows-latest, 24, shard 1/3`), but the *same* job on `windows-latest, 24, shard 1/3` passed
+cleanly on other recent `next` runs with no change in between — so it's a timing/environment race,
+not a deterministic break.
+
+### What happens
+
+Two of the three failing assertions return `null` where a freshly-created temp path is expected:
+
+```
+AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
++ actual - expected
++ null
+- 'C:\Users\RUNNER~1\AppData\Local\Temp\gsd-fallow-bin-pDwGJY\node_modules\.bin\fallow'
+```
+
+The third is a case-mismatch, not a missing-file miss:
+
+```
+AssertionError [ERR_ASSERTION]: Windows: .cmd candidate must be preferred over bare extensionless file
++ 'C:\Users\...\bin\fallow.CMD'
+- 'C:\Users\...\bin\fallow.cmd'
+```
+
+### Root cause (not yet investigated in source)
+
+Not root-caused against `resolveFallowBinary`'s implementation — only established from CI evidence
+that it's environment/timing-dependent rather than logic-dependent: the resolver returns `null`
+(candidate not found at all) for a file the test fixture just created moments earlier, which reads
+as a race between the fixture's `fs.mkdirSync`/file-write and the resolver's lookup — a classic
+Windows-CI flake shape (async I/O completion vs. immediate synchronous read-back on `windows-latest`
+GitHub Actions runners, which are known to have slower/less consistent filesystem event ordering
+than Linux/macOS runners). The `.CMD`-vs-`.cmd` mismatch is consistent with case-insensitive
+directory enumeration order not being guaranteed identical across runs.
+
+### Suggested fix
+
+Needs actual investigation of the fixture setup in `tests/config-schema.property.test.cjs` — likely
+either an `await`-missing write before the resolver call, or the resolver itself needs a retry/flush
+step on Windows. Not diagnosed further since it's orthogonal to whatever PR happens to trip over it.
+
+### Local workaround
+
+None needed for `#3552` specifically — the failure is unrelated to that PR's diff and was flagged in
+a PR comment so a maintainer can re-run or override rather than mistake it for a real regression.
+No fix attempted; out of scope for a PR that doesn't touch `fallow` or PATH resolution.
