@@ -2270,3 +2270,67 @@ line): GSD's state verbs assume a body field that DevFlow's STATE.md template ne
 None reliable — DevFlow's progress counters are maintained by hand until a body `Progress:` line is
 added to STATE.md (or the verb learns the frontmatter fallback). See entries 9 and 12 for the
 adjacent body-prose assumptions.
+
+---
+
+## 26. Two `getGlobalConfigDir('antigravity')` "defaults" tests assert against the real `$HOME`, so both fail on any machine with the Antigravity CLI actually installed
+
+**Status:** READY — written up, not yet filed
+**Found:** 2026-08-18, running `npm test` directly on a personal Mac via a custom remote-CI script
+(not GitHub Actions), while getting `#3552` (protected-branch-warnings) green.
+**Component:** `tests/runtime-homes-descriptor-drive.test.cjs:1231` (`bug #3126: runtime-homes
+getGlobalConfigDir — defaults` → `antigravity default configDir`) and
+`tests/install.test.cjs:92-124` (`getGlobalConfigDir — all runtimes default paths` →
+`getGlobalConfigDir('antigravity') returns expected home-relative path`), both exercising
+`gsd-core/bin/lib/runtime-homes.cjs`'s `getGlobalConfigDir` / `getConfigDirFromHome`.
+**Severity:** low — false test failure only, on developer machines that have the real Antigravity
+CLI installed; does not reproduce in CI (a GitHub Actions runner's `$HOME` never has it), and the
+resolver's actual behavior is correct.
+**Reproducibility: confirmed, deterministic** given the precondition (a real `~/.gemini/antigravity-cli`
+directory present).
+
+### What happens
+
+Both tests fail identically:
+
+```
+AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
++ actual - expected
++ '/Users/<user>/.gemini/antigravity-cli'
+- '/Users/<user>/.gemini/antigravity'
+```
+
+`runtime-homes-descriptor-drive.test.cjs` reports the same underlying assertion three times because
+Node's test runner also marks the two enclosing `describe` blocks (`bug #3126: runtime-homes
+getGlobalConfigDir — defaults` and the outer `folded:bug-3126-global-skills-base-runtime-path`) as
+failed — it is one bug, not three.
+
+### Root cause
+
+Of the ~14-15 runtimes both tables cover, 13 return a fixed, environment-independent path from
+`getGlobalConfigDir`. `antigravity` alone carries real 2.x-vs-legacy migration detection: it does
+live `fs.existsSync` probing of `~/.gemini/antigravity-cli`, `~/.gemini/antigravity-ide`, and legacy
+`~/.gemini/antigravity` to decide which layout is actually installed (correctly verified by the
+adjacent `getGlobalConfigDir/getConfigDirFromHome — antigravity 2.x layout detection` suite in
+`install.test.cjs:129+`, which passes because it sandboxes `home` via `fs.mkdtempSync` for every
+case). Both failing tests clear only the relevant env-var overrides — so an env var can't redirect
+the path — but never sandbox the filesystem/`$HOME` itself. For every other runtime that's harmless,
+because their resolvers ignore the filesystem entirely; for `antigravity` it means "no override, no
+env var" silently doubles as "assume nothing is really installed under the real home directory."
+On a machine (e.g. a developer's actual laptop) that has the real Antigravity CLI installed, the
+resolver correctly returns the 2.x `antigravity-cli` path — which is right — but the test's
+hardcoded `expected` still computes the legacy path, so it fails.
+
+### Suggested fix
+
+Give `antigravity` the same `fs.mkdtempSync`-sandboxed-`home` treatment the adjacent
+`install.test.cjs:129+` suite already uses for this exact resolver, in both places: either exclude
+`antigravity` from the two generic "defaults" tables and cover it only in the dedicated
+2.x-layout-detection suite (which already asserts the no-directories-exist case correctly), or pass
+each table entry an isolated fake home instead of relying on real `os.homedir()`.
+
+### Local workaround
+
+None needed — this doesn't affect CI (GitHub Actions runners start with an empty `$HOME`) or the
+`#3552` branch's own tests; only surfaces when running `npm test` directly on a machine that has the
+real Antigravity CLI installed. Safe to ignore for any work not touching this test file.
