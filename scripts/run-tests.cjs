@@ -37,7 +37,7 @@
 
 const { readdirSync, readFileSync } = require('fs');
 const { join, basename } = require('path');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 
 const SUITES = ['all', 'unit', 'integration', 'install', 'security', 'slow', 'qa'];
@@ -971,15 +971,62 @@ function main() {
       console.error(`run-tests: chunk ${i + 1}/${chunks.length} — ${chunks[i].length} files`);
     }
     try {
-      execFileSync(
-        process.execPath,
-        ['--test', ...(forceExit ? ['--test-force-exit'] : []), concurrency, ...chunks[i]],
-        {
-          stdio: 'inherit',
-          env: { ...process.env },
-          timeout: chunkTimeoutMs,
-        },
-      );
+      if (process.platform === 'win32' || !chunkTimeoutMs || chunkTimeoutMs <= 0) {
+        execFileSync(
+          process.execPath,
+          ['--test', ...(forceExit ? ['--test-force-exit'] : []), concurrency, ...chunks[i]],
+          {
+            stdio: 'inherit',
+            env: { ...process.env },
+            timeout: chunkTimeoutMs,
+          },
+        );
+      } else {
+        const runnerScript = `
+          const { spawn } = require('node:child_process');
+          const child = spawn(process.argv[1], process.argv.slice(2), {
+            stdio: 'inherit',
+            detached: true,
+          });
+          let timedOut = false;
+          const timer = setTimeout(() => {
+            timedOut = true;
+            try { process.kill(-child.pid, 'SIGKILL'); } catch {}
+          }, ${chunkTimeoutMs});
+
+          child.on('close', (code, signal) => {
+            clearTimeout(timer);
+            if (timedOut) {
+              process.exit(124);
+            }
+            if (signal) {
+              try { process.kill(process.pid, signal); } catch {}
+            }
+            process.exit(code ?? 1);
+          });
+        `;
+        const res = spawnSync(
+          process.execPath,
+          ['-e', runnerScript, process.execPath, '--test', ...(forceExit ? ['--test-force-exit'] : []), concurrency, ...chunks[i]],
+          {
+            stdio: 'inherit',
+            env: { ...process.env },
+          },
+        );
+        if (res.status === 124) {
+          const err = new Error('ETIMEDOUT');
+          err.code = 'ETIMEDOUT';
+          err.killed = true;
+          err.status = 124;
+          throw err;
+        }
+        if (res.error) throw res.error;
+        if (res.status !== 0) {
+          const err = new Error(`Command failed: ${process.execPath} --test ...`);
+          err.status = res.status;
+          throw err;
+        }
+      }
     } catch (err) {
       // When the per-chunk timeout fires, execFileSync kills the child and
       // surfaces it as err.code === 'ETIMEDOUT' (POSIX) and/or err.killed === true

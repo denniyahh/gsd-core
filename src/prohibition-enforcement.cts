@@ -42,7 +42,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 // Import the leaf I/O module directly (core.cjs re-export spine retired in epic #1267).
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
@@ -458,6 +458,97 @@ function posTimeout(timeoutMs: number | undefined, def: number): number {
 }
 
 /**
+ * Execute a subprocess synchronously with strict process-group termination on timeout.
+ * On POSIX (macOS/Linux), node --test spawns child worker processes. If execFileSync times out,
+ * killing only the parent leaves child workers orphaned (zombies) spinning indefinitely.
+ * Wrapping the spawn in an isolated process group and sending SIGKILL to the negative PID on
+ * timeout ensures all descendant processes are terminated.
+ */
+function execFileSyncWithPgKill(
+  file: string,
+  args: string[],
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    timeout?: number;
+    maxBuffer?: number;
+    windowsHide?: boolean;
+  } = {},
+): string {
+  const { cwd, env = process.env, timeout, maxBuffer = CHECK_MAX_BUFFER, windowsHide = true } = options;
+  if (process.platform === 'win32' || !timeout || timeout <= 0) {
+    return execFileSync(file, args, {
+      cwd,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout,
+      maxBuffer,
+      windowsHide,
+      encoding: 'utf-8',
+    });
+  }
+
+  const runnerScript = `
+    const { spawn } = require('node:child_process');
+    const child = spawn(process.argv[1], process.argv.slice(2), {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
+    });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try { process.kill(-child.pid, 'SIGKILL'); } catch {}
+    }, ${timeout});
+
+    child.stdout.pipe(process.stdout);
+    child.stderr.pipe(process.stderr);
+
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      if (timedOut) {
+        process.exit(124);
+      }
+      if (signal) {
+        try { process.kill(process.pid, signal); } catch {}
+      }
+      process.exit(code ?? 1);
+    });
+  `;
+
+  const res = spawnSync(process.execPath, ['-e', runnerScript, file, ...args], {
+    cwd,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    maxBuffer,
+    windowsHide,
+    encoding: 'utf-8',
+  });
+
+  if (res.status === 124) {
+    const err = new Error('ETIMEDOUT');
+    (err as unknown as { code: string; killed: boolean; stdout?: string; stderr?: string }).code = 'ETIMEDOUT';
+    (err as unknown as { code: string; killed: boolean; stdout?: string; stderr?: string }).killed = true;
+    (err as unknown as { code: string; killed: boolean; stdout?: string; stderr?: string }).stdout = res.stdout;
+    (err as unknown as { code: string; killed: boolean; stdout?: string; stderr?: string }).stderr = res.stderr;
+    throw err;
+  }
+
+  if (res.error) {
+    throw res.error;
+  }
+
+  if (res.status !== 0) {
+    const err = new Error(`Command failed: ${file} ${args.join(' ')}`);
+    (err as unknown as { status: number | null; stdout?: string; stderr?: string }).status = res.status;
+    (err as unknown as { status: number | null; stdout?: string; stderr?: string }).stdout = res.stdout;
+    (err as unknown as { status: number | null; stdout?: string; stderr?: string }).stderr = res.stderr;
+    throw err;
+  }
+
+  return typeof res.stdout === 'string' ? res.stdout : '';
+}
+
+/**
  * Spawn the negative `node --test` against a single subject (set via the `GSD_PROHIB_SUBJECT`
  * convention, #1279) and return its TAP output. Reuses the bounded-subprocess machinery
  * (`process.execPath`, arg arrays → no shell, `childEnv`, bounded `timeout`/`maxBuffer`) and NEVER
@@ -467,10 +558,8 @@ function posTimeout(timeoutMs: number | undefined, def: number): number {
  */
 function runNodeTestWithSubject(check: CheckDescriptor, cwd: string, subject: string, timeoutMs?: number): string {
   try {
-    return execFileSync(process.execPath, buildNodeTestArgs(check), {
+    return execFileSyncWithPgKill(process.execPath, buildNodeTestArgs(check), {
       cwd,
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
       env: { ...childEnv(), GSD_PROHIB_SUBJECT: subject },
       timeout: posTimeout(timeoutMs, NODE_TEST_TIMEOUT_MS),
@@ -487,10 +576,8 @@ function defaultRunCheck(check: CheckDescriptor, cwd: string, timeoutMs?: number
     if (check.kind === 'node-test') {
       let out = '';
       try {
-        out = execFileSync(process.execPath, buildNodeTestArgs(check), {
+        out = execFileSyncWithPgKill(process.execPath, buildNodeTestArgs(check), {
           cwd,
-          encoding: 'utf-8',
-          stdio: ['ignore', 'pipe', 'pipe'],
           windowsHide: true,
           env: childEnv(),
           timeout: posTimeout(timeoutMs, NODE_TEST_TIMEOUT_MS),
@@ -509,10 +596,8 @@ function defaultRunCheck(check: CheckDescriptor, cwd: string, timeoutMs?: number
       if (!eslintCli) return { passed: false }; // eslint not installed -> fail closed, never throw
       let json = '';
       try {
-        json = execFileSync(process.execPath, [eslintCli, ...buildLintArgs(check)], {
+        json = execFileSyncWithPgKill(process.execPath, [eslintCli, ...buildLintArgs(check)], {
           cwd,
-          encoding: 'utf-8',
-          stdio: ['ignore', 'pipe', 'pipe'],
           windowsHide: true,
           env: childEnv(),
           timeout: posTimeout(timeoutMs, ESLINT_TIMEOUT_MS),
@@ -566,10 +651,8 @@ function defaultProveFailFirst(check: CheckDescriptor, cwd: string, timeoutMs?: 
       if (!eslintCli) return { provenFailFirst: false }; // eslint not installed -> fail closed, never throw
       let json = '';
       try {
-        json = execFileSync(process.execPath, [eslintCli, ...buildLintArgs({ ...check, target: fixture })], {
+        json = execFileSyncWithPgKill(process.execPath, [eslintCli, ...buildLintArgs({ ...check, target: fixture })], {
           cwd,
-          encoding: 'utf-8',
-          stdio: ['ignore', 'pipe', 'pipe'],
           windowsHide: true,
           env: childEnv(),
           timeout: posTimeout(timeoutMs, ESLINT_TIMEOUT_MS),
