@@ -96,19 +96,21 @@ fi
 
 # Execute on Mac with mise-pinned Node 24 and automatic npm ci if lockfile changed.
 #
-# GIT_CONFIG_* below neutralize two of this Mac's PERSONAL global git
-# settings for this test run only — never written to ~/.gitconfig:
-#   - commit.gpgsign=false: test fixtures create throwaway repos and commit
-#     to them; this Mac signs commits with an SSH key that `mise exec`'s
-#     environment cannot load, so every such fixture commit fails with
-#     "failed to write commit object" — a real-CI-vs-here mismatch, since
-#     GitHub Actions runners have no signing configured at all.
-#   - core.hooksPath repointed at an always-empty directory: this Mac's
-#     hooksPath is globally set to ~/.config/git/hooks, which breaks the
-#     one test asserting default hooksPath behavior for commit-docs-guard.
-# Both are env-var overrides (highest git config precedence short of an
-# explicit `-c`), so they apply to every git subprocess the test suite
-# spawns without the test code needing to know about either setting.
+# GIT_CONFIG_GLOBAL/SYSTEM=/dev/null below make every git subprocess the test
+# suite spawns see a clean, default config — never written to ~/.gitconfig.
+# This Mac's real ~/.gitconfig sets both commit.gpgsign=true (signs with an
+# SSH key `mise exec`'s environment can't load, so fixture commits fail with
+# "failed to write commit object") and core.hooksPath=~/.config/git/hooks.
+#
+# An earlier version of this override tried to neutralize just those two
+# keys individually (gpgsign=false, hooksPath repointed at an empty dir).
+# That repointed value was STILL a non-default hooksPath, and dozens of
+# commit-docs-guard and pr-subrepo tests assert default (unset) hooksPath
+# behavior in throwaway repos they create — so the "fix" broke ~25 tests
+# that had nothing to do with gpg signing. Blanking the config files
+# entirely, rather than overriding specific keys, is what GitHub Actions
+# runners actually have (no config at all), so it's the correct target to
+# match rather than a narrower approximation of it.
 ssh -t "$REMOTE" "zsh -lc '
   cd $REMOTE_DIR &&
   CACHED_HASH_FILE=~/.cache/gsd-core-pkg-lock.sha256
@@ -126,12 +128,8 @@ ssh -t "$REMOTE" "zsh -lc '
     mise exec -- npm run build:lib --silent
   fi
 
-  mkdir -p ~/.cache/gsd-ci-empty-hooks
-  export GIT_CONFIG_COUNT=2
-  export GIT_CONFIG_KEY_0=commit.gpgsign
-  export GIT_CONFIG_VALUE_0=false
-  export GIT_CONFIG_KEY_1=core.hooksPath
-  export GIT_CONFIG_VALUE_1=~/.cache/gsd-ci-empty-hooks
+  export GIT_CONFIG_GLOBAL=/dev/null
+  export GIT_CONFIG_SYSTEM=/dev/null
 
   echo \"🚀 Running CI command on Mac: $COMMAND\"
   mise exec -- $COMMAND
