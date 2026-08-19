@@ -2339,7 +2339,7 @@ real Antigravity CLI installed. Safe to ignore for any work not touching this te
 
 ## 27. `resolveFallowBinary` PATH/`node_modules/.bin` resolution tests flake on the `windows-latest` CI shard, independent of any code change
 
-**Status:** READY — written up, not yet filed
+**Status:** DONE — closed upstream as [#3652](https://github.com/open-gsd/gsd-core/issues/3652), fixed by PR [#3654](https://github.com/open-gsd/gsd-core/pull/3654) (`02a36d3db`, 2026-08-19 02:08Z)
 **Found:** 2026-08-19, triaging a failed `full test (windows-latest, 24, shard 1/3)` check on PR
 [#3648](https://github.com/open-gsd/gsd-core/pull/3648) (`#3552`, protected-branch-warnings — a
 config/docs-only PR with no relation to `fallow` or PATH resolution).
@@ -2376,16 +2376,18 @@ AssertionError [ERR_ASSERTION]: Windows: .cmd candidate must be preferred over b
 - 'C:\Users\...\bin\fallow.cmd'
 ```
 
-### Root cause (not yet investigated in source)
+### Root cause (diagnosed by maintainer)
 
-Not root-caused against `resolveFallowBinary`'s implementation — only established from CI evidence
-that it's environment/timing-dependent rather than logic-dependent: the resolver returns `null`
-(candidate not found at all) for a file the test fixture just created moments earlier, which reads
-as a race between the fixture's `fs.mkdirSync`/file-write and the resolver's lookup — a classic
-Windows-CI flake shape (async I/O completion vs. immediate synchronous read-back on `windows-latest`
-GitHub Actions runners, which are known to have slower/less consistent filesystem event ordering
-than Linux/macOS runners). The `.CMD`-vs-`.cmd` mismatch is consistent with case-insensitive
-directory enumeration order not being guaranteed identical across runs.
+**Not a race, not a flake — a deterministic regression.** PR #3618 (epic #3411 Phase 2, `ac1b6d679`)
+replaced `resolveFallowBinary`'s candidate scan with the platform seam `resolveExecutableBinary`,
+which on Windows (a) never probes bare extensionless names (deliberate #3275 carve-out — POSIX shims
+must not win over `.cmd`) and (b) constructs candidates from ambient PATHEXT, returning the
+constructed casing. The feat-3210 tests still asserted the old behavior: exact-case matching on
+bare extensionless fixtures (the two `null` failures) and exact-case equality with the test-created
+`.cmd` lowercase (the case-mismatch failure). The fixture→resolve path is fully synchronous
+(no async write-read race exists). Fixed by PR #3654 (`02a36d3db`, 19 minutes after issue filing) —
+tests now compare case-insensitively, use `.cmd`-shaped fixtures on Windows, and assert that
+bare-extensionless-only resolves to `null` on Windows.
 
 ### Suggested fix
 
