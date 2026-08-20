@@ -233,7 +233,7 @@ provide — which misled this session into believing the ledger was gating a shi
 
 ### 6. `query commit` will commit onto a protected integration branch with no guard
 
-**Status:** IN PROGRESS — maintainer requested that the former combined PR [#3214](https://github.com/open-gsd/gsd-core/pull/3214) be split. The branch-warning fix remains tracked by [#3158](https://github.com/open-gsd/gsd-core/issues/3158); the separate background-dispatch concern is [#3159](https://github.com/open-gsd/gsd-core/issues/3159). Follow-up work is ongoing from the closed #3214 split.
+**Status:** DONE — [#3158](https://github.com/open-gsd/gsd-core/issues/3158) closed 2026-08-20, resolved by [#3648](https://github.com/open-gsd/gsd-core/pull/3648) rather than by the direct branch-warning PR. Sequence: the former combined PR #3214 was split per maintainer request into #3158 (branch warning, tracked here) and #3159 (background-dispatch, separate, still open). #3158's own attempt, PR [#3389](https://github.com/open-gsd/gsd-core/pull/3389), went through three review rounds fixing real bugs (exit-status inversion, detached-HEAD shell error) but collided with a concurrently-reviewed PR (#3648, closing the related #3552) that added a typed `gsd_run query git.base-branch --is-protected` primitive. #3648's own "none"-arm warning turned out to already implement everything #3389 was adding — same check, same location — plus it extends to `ship.md` and closes the `config.git.develop` gap this entry's own repro depends on, via the new `git.protected_branches` config field. #3389 was closed as superseded rather than merged; #3648 is what actually ships the fix (open, CI-passing, not yet merged to `next` as of 2026-08-20).
 `git.branching_strategy: "none"`, `query commit` committed successfully on `develop`. This is a
 safety enhancement because the documented `none` contract intentionally commits on the current
 branch; the low-risk fix is an early warning on the resolved base branch, not a blanket refusal.
@@ -759,7 +759,7 @@ comments in the same commit as any legitimate change from that call.
 
 ## 10. `model` and `effort` resolve through different mechanisms at different times, and the docs assert a symmetry that does not exist
 
-**Status:** APPROVED — filed upstream as [#3160](https://github.com/open-gsd/gsd-core/issues/3160)
+**Status:** DONE — [#3160](https://github.com/open-gsd/gsd-core/issues/3160) closed 2026-08-20 as completed. Correction to my own initial read: the closing PRs were **not mine** — maintainer trek-e implemented and merged all five approved sub-items directly (10a→#3542, 10b→#3540, 10c→#3539, 10d→#3541, docs→#3536, all closing sub-issues #3530–#3534), then verified each against `next` and closed #3160. My role here was filing the issue and getting it triaged to `approved-enhancement`, not authoring the fix — there is no PR of mine on this issue to check in on.
 in the current resolver/sync source contract. This remains an enhancement bundle, not one defect.
 **Found:** 2026-08-02, DevFlow — routing subagent models/effort so the session model reaches the executor
 **Component:** `gsd-core/bin/lib/model-resolver.cjs`, `install-effort-resolver.cjs`,
