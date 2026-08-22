@@ -2400,3 +2400,78 @@ step on Windows. Not diagnosed further since it's orthogonal to whatever PR happ
 None needed for `#3552` specifically — the failure is unrelated to that PR's diff and was flagged in
 a PR comment so a maintainer can re-run or override rather than mistake it for a real regression.
 No fix attempted; out of scope for a PR that doesn't touch `fallow` or PATH resolution.
+
+---
+
+## 28. gsd-pi migration staging resolves to the live repo `.gsd`, so the retained-evidence hash never matches (legacy → DB migration)
+
+**Status:** FILED — [open-gsd/gsd-pi#1866](https://github.com/open-gsd/gsd-pi/issues/1866), 2026-08-19
+**Found:** 2026-08-19, DevFlow legacy `.planning` → DB-backed `.gsd` migration (auto-init retried twice)
+**Component:** `@opengsd/gsd-pi` — `migrate/execution.ts` (staging), `paths.ts` (`gsdRoot`/`probeGsdRoot` git-root anchor), `migrate/publication-store.ts` (retained-evidence check)
+**Severity:** high — the migration cannot complete for any repo that already has a `.gsd` at the git root (which includes the auto-init flow's own first-run state), and the resume path re-hits it
+**Reproducibility:** confirmed 2/2 attempts; mechanism proven by direct probe and by a workaround that makes it pass
+
+### What happens
+
+`executeMigrationWrite` stages the projection via `mkdtempSync(join(targetRoot, ".gsd-migrate-stage-"))` and expects `gsdRoot(stagingRoot)` to resolve to `stagingRoot/.gsd`. It does not: `probeGsdRoot` (paths.ts) runs a git-root probe — `if (gitRoot) { candidate = join(gitRoot, ".gsd"); if (existsSync(candidate)) return candidate; }` — so a temp dir inside the repo resolves to **the repo's own `.gsd`**. Result:
+
+1. `writeGSDDirectory` writes the "staged" projection **directly into the live `.gsd`** (proven: `.gsd/PROJECT.md` mtime 19ms after the "Writing .gsd directory" notification).
+2. `migrationPublicationRequestHash` hashes `{legacy: treeHashes(.planning), projection: treeHashes(live .gsd)}` — the live tree includes `gsd.db`, `gsd.db-wal`, `gsd.db-shm`, `notifications.jsonl`.
+3. `prepareMigrationPublication` then writes the intent file (`migration-applications/<key>.intent.json`) **into that same live tree** before copying it into retention, and the copy re-walks the tree — so the copy-time tree differs from the hash-time tree (intent file added; WAL/notifications churn).
+
+The retained-evidence check fails:
+
+```
+Migration failed without replacing database authority; any committed Import Application was retained: migration publication retained evidence does not match the reviewed request hash
+```
+
+The retained tree is deleted on the mismatch (by design) and only the intent file survives. A retry does not recover: the repo now has a `.gsd`, so staging is hijacked again, the new request hash no longer matches the retained publication, and `findPendingMigrationPublication` refuses with "pending migration Application evidence differs from the current source; restore the reviewed source before retrying".
+
+### Reproduction
+
+1. Any repo with a legacy `.planning/` **and** an existing `.gsd/` at the git root (or: run the migration once so prepare creates `.gsd`, then run it again).
+2. `gsdRoot(<temp-dir-inside-repo>)` returns `<repo>/.gsd`, not `<temp-dir>/.gsd`.
+3. Run the migration; observe the retained-evidence error above.
+
+### Evidence that the copy mechanics are otherwise sound
+
+A round-trip of all 1016 legacy + 586 projection entries (hash → copy → re-hash) is byte-identical on stable trees. The writer is deterministic (3 identical staged-tree hashes). The failure is entirely the tree mutating mid-run because the staging root IS the live `.gsd`.
+
+### Workaround
+
+Move `.gsd` aside before migrating so the git-root probe falls through to the staging dir's own `.gsd`. With `.gsd` absent, staging resolves correctly and the migration completes (verified end-to-end: 8M/42S/174T imported, tool verification passed).
+
+### Suggested fix
+
+Stage outside the target repo's git root, or make `gsdRoot` resolve the staging prefix to `stagingRoot/.gsd` unconditionally (e.g. create `stagingRoot/.gsd` before the first `gsdRoot` call, or special-case the `.gsd-migrate-stage-` prefix in `probeGsdRoot`). The resume path (`findMigrationPublication` by request hash) is also broken by the same root cause and should be tested with a `.gsd` present.
+
+---
+
+## 29. gsd-pi migration import deadlocks: transformer synthesizes dual task claims, and no supported path records preview resolutions
+
+**Status:** FILED — [open-gsd/gsd-pi#1867](https://github.com/open-gsd/gsd-pi/issues/1867), 2026-08-19
+**Found:** 2026-08-19, same DevFlow migration (after workaround for #28)
+**Component:** `@opengsd/gsd-pi` — `migrate/writer.ts` (slice-plan `## Tasks` synthesis), `legacy-import-preview-gsd-hierarchy.ts` / `legacy-import-preview-classifier.ts` (task-grammar classifier), `legacy-import-application-plan.ts` (resolution gate), `migrate/execution.ts` (`assertMigrationImportMatchesPreview`)
+**Severity:** high — a legacy tree whose slice plans carry task checkboxes *and* separate `T##-PLAN.md` files (a common dual representation) cannot be imported: 98 review items, then a task-count mismatch, with no supported way to record the required resolutions
+**Reproducibility:** confirmed 2/2 against DevFlow's legacy tree (98 unresolved: 66 ambiguous-task-membership + 32 conflicting-legacy-import-target; then `tasks 142/174`)
+
+### What happens
+
+The migration pipeline parses `.planning`, transforms it, and writes a staged `.gsd` tree. Two problems:
+
+1. **Dual claims are synthesized by the transformer itself.** For every slice with separate task files, `migrate/writer.ts` writes BOTH a `## Tasks` section with `- [x] **T01: …**` checkboxes into the slice plan AND a `# T01: …` H1 into `T01-PLAN.md`. The import classifier sees two sources claiming one task target → `conflicting-legacy-import-target` ×32. The source `.planning` files contain no such checkbox (proven by grep) — the conflict is generated, not inherited.
+2. **Non-task slice docs deadlock the gate.** RESEARCH/SUMMARY files under slices contain zero of the four task grammars → `ambiguous-task-membership` ×66 → `requires-user` resolutions. There is **no supported API to record resolutions**: they are baked into the sealed preview artifact at create time, and `compileLegacyImportApplicationPlan` hard-fails on any `requires-user`/`unsupported` resolution (`LEGACY_IMPORT_APPLICATION_PREVIEW_UNRESOLVED`: "legacy import Preview requires a user-selected or unsupported resolution"). Nothing in the shipped API writes them back.
+3. Even with the gate bypassed, `assertMigrationImportMatchesPreview` then hard-fails on the task delta (`tasks 142/174`) — the classifier's routing drops the conflicted tasks, and the check accepts no delta.
+
+### Reproduction
+
+1. Legacy `.planning` whose milestone phase dirs contain `NN-NN-PLAN.md` task files (phase/plan frontmatter), plus slice plans that also list tasks.
+2. Run the migration (with #28 worked around). Observe the two errors in sequence.
+
+### Workaround (used to complete the DevFlow migration)
+
+In a patched copy of the package: (a) stop emitting the slice-plan `## Tasks` checkbox section in `migrate/writer.ts` (the task files carry the claims — 174/174 tasks then import, count check passes); (b) re-seal the preview with `requires-user` resolutions rewritten to `preserved` (the only supported recordable disposition) so the gate passes. Outcome: 8M/42S/174T imported, all tool verification green, non-task docs preserved in the archive.
+
+### Suggested fix
+
+Either (a) teach the transformer to emit exactly one grammar per task (skip the slice-plan checkbox list when separate task files exist), or (b) teach the classifier/compiler to treat a slice-plan checkbox and its task file as the same claim instead of a conflict, and (c) add a supported API to record user resolutions on a preview (write `preserved`/`mapped` dispositions) so non-interactive migration of mixed-content trees is possible, and (d) make `assertMigrationImportMatchesPreview` surface which tasks were dropped and allow an explicit reviewed delta rather than a bare hard failure.
