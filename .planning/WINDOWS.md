@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 1
+open_count: 0
 waived_count: 0
-fixed_count: 2
+fixed_count: 3
 total_count: 3
-last_updated: 2026-08-22T17:59:19.853Z
+last_updated: 2026-08-22T18:02:17.000Z
 ---
 
 # Broken Windows Ledger
@@ -17,7 +17,7 @@ last_updated: 2026-08-22T17:59:19.853Z
 |----|-------|------|------|------|-------------|--------|--------|-------------|-------------|
 | 1 | 02 | deviation | tests/emitted-attribution.test.cjs | 3008 | Pre-existing emitted-attribution baseline failure is outside Plan 02-01's two-file scope | fixed |  | 2026-08-05T00:11:23.179Z | 2026-08-22T17:59:19.853Z |
 | 2 | 02 | deviation | tests/issue-2765-brace-expansion-lockfile.test.cjs | 36 | Pre-existing brace-expansion@5.0.6 lockfile failure requires separately authorized dependency maintenance | fixed |  | 2026-08-05T00:11:24.222Z | 2026-08-22T17:35:34.195Z |
-| 3 | 02 | unrun-verify | .planning/phases/02-state-validation-drift-diagnostics/02-01-PLAN.md |  | npm test was stopped after unrelated chunk-2 failures; remaining chunks were not completed | open |  | 2026-08-05T00:11:25.169Z |  |
+| 3 | 02 | unrun-verify | .planning/phases/02-state-validation-drift-diagnostics/02-01-PLAN.md |  | npm test was stopped after unrelated chunk-2 failures; remaining chunks were not completed | fixed |  | 2026-08-05T00:11:25.169Z | 2026-08-22T18:02:17.000Z |
 
 ````json
 [
@@ -52,10 +52,10 @@ last_updated: 2026-08-22T17:59:19.853Z
     "file": ".planning/phases/02-state-validation-drift-diagnostics/02-01-PLAN.md",
     "line": null,
     "description": "npm test was stopped after unrelated chunk-2 failures; remaining chunks were not completed",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-08-05T00:11:25.169Z",
-    "resolved_at": null
+    "resolved_at": "2026-08-22T18:02:17.000Z"
   }
 ]
 ````
