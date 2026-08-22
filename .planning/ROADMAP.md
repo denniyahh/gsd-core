@@ -19,7 +19,7 @@ Milestone v1.1 repairs the existing `state.validate` path so the shipped `STATE.
 
 ### Milestone v1.1 — State Diagnostics
 
-- [ ] **Phase 2: State Validation Drift Diagnostics** - Resolve the active phase from shipped state metadata and prove that `state.validate` reports real disk drift.
+- [x] **Phase 2: State Validation Drift Diagnostics** - Resolve the active phase from shipped state metadata and prove that `state.validate` reports real disk drift. (completed 2026-08-22)
 
 ### Milestone v1.2 — Executor Safety
 
@@ -62,5 +62,5 @@ Milestone v1.1 repairs the existing `state.validate` path so the shipped `STATE.
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 2. State Validation Drift Diagnostics | v1.1 | 1/1 | In Progress|  |
+| 2. State Validation Drift Diagnostics | v1.1 | 1/1 | Complete | 2026-08-22 |
 | 3. Executor Safety and Branching Guard | v1.2 | 0/0 | Not Started|  |
