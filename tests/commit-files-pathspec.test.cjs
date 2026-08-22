@@ -2521,6 +2521,7 @@ describe('workflow call sites declare --files (#2269)', () => {
     // commands that shipped rather than an instruction to run one.
     const NOT_INSTRUCTION = new Map([
       ['CHANGELOG.md', 'generated from .changeset/ fragments; a historical record, not instruction'],
+      ['scratch/UPSTREAM-GSD-ISSUES.md', 'a personal-fork upstream-issue ledger (see scratch/FORK_NOTES.md); its `query commit` example invocations are illustrative prose describing filed bugs, not instructions a runtime would follow'],
     ]);
     const strays = uncoveredFiles(
       trackedMd, scanRoots, NOT_INSTRUCTION,
