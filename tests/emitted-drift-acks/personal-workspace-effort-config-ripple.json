@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "paths": {
+    "agents/gsd-plan-checker.md": {
+      "reason": "This fork's .planning/config.json sets effort.agent_overrides.gsd-plan-checker=\"high\" and effort.default=\"high\", which src/install-effort-resolver.cts (unchanged relative to origin/next) reads at emission time and stamps into this agent's effort/model annotations across every runtime target. origin/next's baseline build has no equivalent project config, so its emitted copy differs purely from that config-data input, not from any change to the agent source or the resolver code. No content change was made to agents/gsd-plan-checker.md itself (confirmed via git diff origin/next...HEAD -- agents/gsd-plan-checker.md: empty)."
+    },
+    "agents/gsd-planner.md": {
+      "reason": "Same root cause as agents/gsd-plan-checker.md above: this fork's .planning/config.json effort block (effort.default=\"high\", effort.routing_tier_defaults) rewrites this agent's stamped effort/model annotations via the unchanged src/install-effort-resolver.cts, purely from project-config data absent in origin/next's baseline build. No content change was made to agents/gsd-planner.md itself (confirmed via git diff origin/next...HEAD -- agents/gsd-planner.md: empty)."
+    },
+    "gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md": {
+      "reason": "Same effort-config ripple as gsd-core/workflows/execute-phase.md above (this file is one of its steps). No content change was made to the step source itself (confirmed via git diff origin/next...HEAD: empty)."
+    },
+    "gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md": {
+      "reason": "Same effort-config ripple as gsd-core/workflows/execute-phase.md above (this file is one of its steps). No content change was made to the step source itself (confirmed via git diff origin/next...HEAD: empty)."
+    },
+    "agents/gsd-plan-checker.agent.md": {
+      "reason": "The copilot runtime's .agent.md-renamed form of agents/gsd-plan-checker.md carries the same effort-config stamp as the .md form above (same root cause: this fork's .planning/config.json effort block, read by unchanged src/install-effort-resolver.cts). No content change was made to the agent source itself."
+    },
+    "agents/gsd-planner.agent.md": {
+      "reason": "The copilot runtime's .agent.md-renamed form of agents/gsd-planner.md carries the same effort-config stamp as the .md form above (same root cause: this fork's .planning/config.json effort block, read by unchanged src/install-effort-resolver.cts). No content change was made to the agent source itself."
+    },
+    "agents/subagents/gsd-plan-checker.md": {
+      "reason": "The kimi runtime's subagents-derived form of agents/gsd-plan-checker.md carries the same effort-config stamp as the .md form above (same root cause: this fork's .planning/config.json effort block, read by unchanged src/install-effort-resolver.cts). No content change was made to the agent source itself."
+    },
+    "agents/subagents/gsd-planner.md": {
+      "reason": "The kimi runtime's subagents-derived form of agents/gsd-planner.md carries the same effort-config stamp as the .md form above (same root cause: this fork's .planning/config.json effort block, read by unchanged src/install-effort-resolver.cts). No content change was made to the agent source itself."
+    }
+  }
+}
