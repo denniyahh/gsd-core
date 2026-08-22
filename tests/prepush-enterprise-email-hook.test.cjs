@@ -4,11 +4,19 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { runHook } = require('./helpers/process-seam.cjs');
+const { throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const HOOK_PATH = path.join(ROOT, '.githooks', 'pre-push');
+
+// #3271: class-norm timeout, HOOK_FANOUT_TIMEOUT_MS not a per-suite value — see
+// helpers/timeouts.cjs. This file is the fan-out class: the hook runs under
+// `bash` and shells to a mock `git` that is itself a bash script, so a single
+// runHook call is several nested spawns, not the single short probe the base
+// PROBE_TIMEOUT_MS class describes.
+const { HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 /**
  * Write a mock bash script to a .sh file in tmpDir and return its absolute path.
@@ -47,7 +55,8 @@ exit 1
 `);
 
     assert.throws(() => {
-      execFileSync('bash', [HOOK_PATH], {
+      const r = runHook(HOOK_PATH, [], {
+        interpreter: 'bash',
         cwd: ROOT,
         env: {
           ...process.env,
@@ -55,8 +64,9 @@ exit 1
           GSD_BLOCKED_AUTHOR_REGEX: '@example-corp\\.com$',
         },
         input: 'refs/heads/pr refs-local-sha refs/heads/pr refs-remote-sha\n',
-        stdio: 'pipe',
+        timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
       });
+      throwIfFailed(r, `bash ${HOOK_PATH}`);
     }, /Push blocked: commit author email matched local blocked regex/);
   });
 
@@ -78,7 +88,8 @@ fi
 exit 1
 `);
 
-    execFileSync('bash', [HOOK_PATH], {
+    const r = runHook(HOOK_PATH, [], {
+      interpreter: 'bash',
       cwd: ROOT,
       env: {
         ...process.env,
@@ -86,7 +97,8 @@ exit 1
         GSD_BLOCKED_AUTHOR_REGEX: '@example-corp\\.com$',
       },
       input: 'refs/heads/pr refs-local-sha refs/heads/pr refs-remote-sha\n',
-      stdio: 'pipe',
+      timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
     });
+    throwIfFailed(r, `bash ${HOOK_PATH}`);
   });
 });

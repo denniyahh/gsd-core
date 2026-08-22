@@ -45,6 +45,11 @@ const {
 } = installProfiles;
 import { CLUSTERS } from './clusters.cjs';
 import type { ClusterMap } from './clusters.cjs';
+// #2870: `isGlobalScope` centralizes the `scope === 'global'` boolean
+// projection `applySurface` needs at `_computePathPrefix`'s `isGlobal:
+// boolean` boundary (see its doc comment in install-scope.cts for why the
+// projection is centralized rather than eliminated).
+import { isGlobalScope } from './install-scope.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import runtimeArtifactLayout = require('./runtime-artifact-layout.cjs');
 const { findInstallSourceRoot } = runtimeArtifactLayout;
@@ -52,6 +57,8 @@ const { findInstallSourceRoot } = runtimeArtifactLayout;
 import runtimeArtifactConversion = require('./runtime-artifact-conversion.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import runtimeArtifactInstallPlan = require('./runtime-artifact-install-plan.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import retiredArtifactCleanup = require('./retired-artifact-cleanup.cjs');
 const { assertDestWithinConfigHome } = runtimeArtifactInstallPlan;
 
 const SURFACE_FILE_NAME = '.gsd-surface.json';
@@ -64,12 +71,20 @@ interface AgentCtx {
   runtime: string;
   pathPrefix: string;
   attribution: string | null | undefined;
+  /** #2875 Part 2 (row I1): install root, mirrors
+   *  runtime-artifact-install-plan.cts's identically-named field — see its
+   *  doc comment. */
+  targetDir?: string | null;
 }
 
 interface ArtifactKind {
   kind: string;
   destSubpath: string;
   prefix: string;
+  // #2911: optional install-root override (e.g. Codex skills -> $HOME/.agents),
+  // set by resolveRuntimeArtifactLayout's dispatchKindEntry. Must be honored as
+  // a FALLBACK by every destination-computation call site — see applySurface.
+  home?: string;
   stage: (resolvedProfile: { name: string; skills: Set<string> | '*'; agents: Set<string> }, agentCtx?: AgentCtx) => string;
 }
 
@@ -351,6 +366,9 @@ function applySurface(runtimeConfigDir: string, layout: Layout, manifest: Map<st
   }
   const skillManifest = normalizeSkillManifest(layout.configDir, manifest);
   const resolved = resolveSurface(layout.configDir, skillManifest, clusterMap, registry);
+  // Profile toggles must converge retired surfaces too. Once a kind disappears
+  // from artifactLayout there is no normal sync pass left to prune it (#2644).
+  retiredArtifactCleanup.pruneRetiredRuntimeArtifacts(layout.runtime, layout.configDir);
   // #1575: agents kind now mirrors createRuntimeArtifactInstallPlan — build
   // agentCtx (pathPrefix + attribution) and pass it to kind.stage() so
   // stageAgentsForRuntimeWithConverter applies the full inline-loop pipeline
@@ -360,12 +378,23 @@ function applySurface(runtimeConfigDir: string, layout: Layout, manifest: Map<st
   const _homedirFn: () => string = opts?.homedir ?? (() => os.homedir());
   const _resolvedTarget = posixNormalize(path.resolve(layout.configDir));
   const _homeDir = posixNormalize(_homedirFn());
-  const _isGlobal = (layout.scope ?? 'global') === 'global';
+  // #2870: same judgment as createRuntimeArtifactInstallPlan's identical
+  // line — `layout.scope` is already the resolved scope value on the
+  // `Layout` this function received. `layout.scope` is optional, so the
+  // pre-existing `?? 'global'` default is kept ahead of the call: it must
+  // run BEFORE `isGlobalScope`, because `isGlobalScope(undefined)` throws
+  // (unlike the old inline `undefined === 'global'`, which silently
+  // evaluated to `false`) — the default is what makes an undefined scope
+  // resolve to `'global'` here, exactly as it did before. `isGlobalScope`
+  // then projects the defaulted value to the boolean `_computePathPrefix`'s
+  // existing `isGlobal: boolean` API requires.
+  const _isGlobal = isGlobalScope(layout.scope ?? 'global');
   const _isOpencode = layout.runtime === 'opencode';
   const _isWindowsHost = (opts?.platform ?? process.platform) === 'win32';
   const _pathPrefix = runtimeArtifactConversion._computePathPrefix({ isGlobal: _isGlobal, isOpencode: _isOpencode, isWindowsHost: _isWindowsHost, resolvedTarget: _resolvedTarget, homeDir: _homeDir });
   const _attribution = opts?.resolveAttribution ? opts.resolveAttribution(layout.runtime) : undefined;
-  const agentCtx: AgentCtx = { runtime: layout.runtime, pathPrefix: _pathPrefix, attribution: _attribution };
+  // #2875 Part 2 (row I1): layout.configDir is this call's install root.
+  const agentCtx: AgentCtx = { runtime: layout.runtime, pathPrefix: _pathPrefix, attribution: _attribution, targetDir: layout.configDir };
 
   const tempDirsToClean: string[] = [];
   // #1575: When the surface has no state modifications AND the base profile is
@@ -410,7 +439,13 @@ function applySurface(runtimeConfigDir: string, layout: Layout, manifest: Map<st
           tempDirsToClean.push(rewritten);
         }
       }
-      const dest = assertDestWithinConfigHome(layout.configDir, kind.destSubpath);
+      // #2911: honor kind.home as a FALLBACK-preferred override (e.g. Codex
+      // skills -> $HOME/.agents), never a blanket replacement — kinds without
+      // a `home` must keep resolving against layout.configDir. This must stay
+      // in lockstep with _copyStaged's root selection in src/install-engine.cts;
+      // the parity test in tests/runtime-artifact-layout-surface.test.cjs
+      // enforces that the two writers never diverge again.
+      const dest = assertDestWithinConfigHome(kind.home ?? layout.configDir, kind.destSubpath);
       _syncGsdDir(staged, dest, kind, skillManifest, layout.runtime);
     }
   } finally {
@@ -595,13 +630,11 @@ function _syncGsdDir(stagedDir: string, destDir: string, kind: ArtifactKind | st
     // from install and orphaned the installed gsd-*.md files, and the unscoped
     // prune deleted user-owned command files.
     //
-    // NOTE: the destName rule below intentionally mirrors bin/install.js
-    // `_copyStaged` (the `namespacedByDir` decision). Keep them in sync.
-    const destLast = (typeof kind === 'object' && kind !== null && kind.destSubpath)
-      ? path.basename(kind.destSubpath)
-      : '';
-    const prefixStem = kindPrefix ? kindPrefix.replace(/-$/, '') : '';
-    const namespacedByDir = kindName === 'commands' && destLast === prefixStem;
+    // Single source of truth: runtimeArtifactLayout.isNamespacedByDir (#2871
+    // Phase 2 review finding — this rule previously drifted independently
+    // across install-engine.cts / surface.cts / runtime-artifact-layout.cts).
+    const kindDestSubpath = (typeof kind === 'object' && kind !== null && kind.destSubpath) ? kind.destSubpath : '';
+    const namespacedByDir = runtimeArtifactLayout.isNamespacedByDir(kindName, kindDestSubpath, kindPrefix);
 
     const stagedFiles = fs.readdirSync(stagedDir).filter(f => f.endsWith('.md'));
     const stagedDestNames = new Set<string>();

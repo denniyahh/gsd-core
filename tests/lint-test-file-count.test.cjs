@@ -10,7 +10,8 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { runNode } = require('./helpers/process-seam.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const LINT_SCRIPT = path.join(ROOT, 'scripts', 'lint-test-file-count.cjs');
@@ -19,6 +20,7 @@ const {
   Verdict,
   evaluateLint,
   testEffectivePrefix,
+  _buildTestMap,
 } = require(LINT_SCRIPT);
 
 // ---------------------------------------------------------------------------
@@ -30,13 +32,12 @@ function makeFiles(prefix, names) {
 }
 
 function runCliJson(extraArgs = []) {
-  const result = spawnSync(
-    process.execPath,
+  const result = runNode(
     [LINT_SCRIPT, '--json', ...extraArgs],
-    { encoding: 'utf8' }
+    { timeoutMs: PROBE_TIMEOUT_MS }
   );
   const parsed = JSON.parse(result.stdout);
-  return { status: result.status, data: parsed };
+  return { status: result.exitCode, data: parsed };
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +264,42 @@ describe('evaluateLint — allowlist behaviour (identity-based)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// _buildTestMap — longest-prefix bucketing (order-independence)
+// ---------------------------------------------------------------------------
+
+describe('_buildTestMap — longest-prefix bucketing', () => {
+  // Regression for readdirSync-order-dependent bucketing: `verify.cjs` and
+  // `verify-command-grounding.cjs` are production modules where one name is a
+  // hyphen-extension of the other. fs.readdirSync order is not stable across
+  // platforms (e.g. Linux ext4 hash order vs macOS HFS+/APFS), so
+  // `prodPrefixes` (a Map built from readdirSync) can iterate in either
+  // order. A test file matching the longer, more specific prefix must always
+  // bucket there — never fall through to the shorter prefix — regardless of
+  // which key the Map visits first.
+  const testFile = makeFiles('verify-command-grounding', ['verify-command-grounding.test.cjs'])[0];
+
+  test('buckets to the longer prefix when the short prefix is visited first', () => {
+    const prodPrefixes = new Map([
+      ['verify', '/fake/src/verify.cjs'],
+      ['verify-command-grounding', '/fake/src/verify-command-grounding.cjs'],
+    ]);
+    const map = _buildTestMap(prodPrefixes, [testFile]);
+    assert.deepStrictEqual(map.get('verify-command-grounding'), [testFile]);
+    assert.deepStrictEqual(map.get('verify'), []);
+  });
+
+  test('buckets to the longer prefix when the long prefix is visited first', () => {
+    const prodPrefixes = new Map([
+      ['verify-command-grounding', '/fake/src/verify-command-grounding.cjs'],
+      ['verify', '/fake/src/verify.cjs'],
+    ]);
+    const map = _buildTestMap(prodPrefixes, [testFile]);
+    assert.deepStrictEqual(map.get('verify-command-grounding'), [testFile]);
+    assert.deepStrictEqual(map.get('verify'), []);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // testEffectivePrefix — issue-stamp stripping
 // ---------------------------------------------------------------------------
 
@@ -302,8 +339,8 @@ describe('testEffectivePrefix', () => {
 
 describe('CLI --json', () => {
   test('script parses without syntax errors', () => {
-    const result = spawnSync(process.execPath, ['--check', LINT_SCRIPT], { encoding: 'utf8' });
-    assert.strictEqual(result.status, 0, result.stderr);
+    const result = runNode(['--check', LINT_SCRIPT], { timeoutMs: PROBE_TIMEOUT_MS });
+    assert.strictEqual(result.exitCode, 0, result.stderr);
   });
 
   test('exits 0 against real repo (allowlist covers all current violations)', () => {

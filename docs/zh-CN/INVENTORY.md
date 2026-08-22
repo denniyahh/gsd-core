@@ -6,7 +6,7 @@
 
 - 本文件中的数量基于 v1.36.0 快照，版本之间可能存在偏差。如需实时数量，请在检出目录中运行 `ls commands/gsd/*.md | wc -l`、`ls agents/gsd-*.md | wc -l` 等命令。
 - 本文件列举了所有六大类别（代理、命令、工作流、参考资料、CLI 模块、钩子）中的每个已发布功能面。广义文档可能呈现叙述性内容或精选子集；当其与文件系统不一致时，本文件及目录清单为准。
-- v1.36.0 之后新增的功能面应首先在此处记录，再传播到广义文档中。`tests/inventory-counts.test.cjs`、`tests/commands-doc-parity.test.cjs`、`tests/agents-doc-parity.test.cjs`、`tests/cli-modules-doc-parity.test.cjs`、`tests/hooks-doc-parity.test.cjs`、`tests/architecture-counts.test.cjs` 和 `tests/command-count-sync.test.cjs` 中的漂移控制测试将数量和清单内容锚定到文件系统。
+- v1.36.0 之后新增的功能面应首先在此处记录，再传播到广义文档中。`tests/inventory-manifest-sync.test.cjs` 中的漂移控制测试将清单内容锚定到文件系统。
 
 这是所有已发布 GSD Core 功能面的权威目录。请参阅 [文档索引](README.md) 按主题导航。
 
@@ -189,7 +189,6 @@
 | `code-review.md` | 通过 gsd-code-reviewer 审查阶段源码变更；生成 REVIEW.md。 | `/gsd-code-review` |
 | `complete-milestone.md` | 将已发布版本标记为完成 — MILESTONES.md 条目、PROJECT.md 演进、标签。 | `/gsd-complete-milestone` |
 | `diagnose-issues.md` | 编排并行调试代理以调查 UAT 差距并找出根本原因。 | `/gsd-verify-work`（自动诊断） |
-| `discovery-phase.md` | 以适当的深度级别执行发现。 | `/gsd-new-project`（发现路径） |
 | `discuss-phase-assumptions.md` | 假设模式讨论 — 通过以代码库为先的分析提取实施决策。 | `/gsd-discuss-phase`（当 `discuss_mode=assumptions` 时） |
 | `discuss-phase-power.md` | 高级用户讨论 — 将所有问题预生成到 JSON 状态文件和 HTML UI 中。 | `/gsd-discuss-phase --power` |
 | `discuss-phase.md` | 通过迭代灰色地带讨论提取实施决策。 | `/gsd-discuss-phase` |
@@ -259,10 +258,9 @@
 | `thread.md` | 为跨会话工作创建、列出、关闭或恢复持久上下文线程。 | `/gsd-thread` |
 | `update.md` | 将 GSD 更新到最新版本并显示变更日志。 | `/gsd-update` |
 | `validate-phase.md` | 回溯审计并填补已完成阶段的奈奎斯特验证空缺。 | `/gsd-validate-phase` |
-| `verify-phase.md` | 通过目标反向分析验证阶段目标的达成情况。 | `execute-phase.md`（执行后） |
 | `verify-work.md` | 带自动诊断的对话式 UAT — 生成 UAT.md 和修复计划。 | `/gsd-verify-work` |
 
-> **注意：** 某些工作流没有直接面向用户的命令（例如 `execute-plan.md`、`verify-phase.md`、`transition.md`、`node-repair.md`、`diagnose-issues.md`）— 它们由编排器工作流在内部调用。`discovery-phase.md` 是 `/gsd-new-project` 的备用入口。
+> **注意：** 某些工作流没有直接面向用户的命令（例如 `execute-plan.md`、`transition.md`、`node-repair.md`、`diagnose-issues.md`）— 它们由编排器工作流在内部调用。
 
 ---
 
@@ -280,6 +278,7 @@
 | `model-profile-resolution.md` | 模型解析算法文档。 |
 | `verification-patterns.md` | 如何验证不同的产物类型。 |
 | `verification-overrides.md` | 每种产物的验证覆盖规则。 |
+| `verifier-phase-gates.md` | 由 gsd-verifier 急切加载的验证期门禁（自已退役的 verify-phase 工作流迁移，#1892）：决策覆盖校验（#2492）、测试质量审计、基础设施阶段的 human-verification 划定（#2504）。 | |
 | `planning-config.md` | 完整的配置模式和行为。 |
 | `git-integration.md` | Git 提交、分支和历史模式。 |
 | `git-planning-commit.md` | 规划目录提交约定。 |
@@ -382,7 +381,7 @@
 | `cjs-command-router-adapter.cjs` | 清单支持的 CJS 命令族路由器的共享兼容性适配器 |
 | `clock.cjs` | 用于确定性锁测试的可注入时钟接缝（now/sleep） |
 | `clusters.cjs` | 运行时 surface 模块的技能集群定义（ADR-0011 阶段 2） |
-| `code-review-flags.cjs` | `/gsd:code-review` 的类型化标志解析器；导出 `parseCodeReviewFlags(argv)`（→ `{ fix, all, auto, depth, files }`）和 `resolveCodeReviewWorkflow(flags)`（→ `'code-review.md' \| 'code-review-fix.md'`）；`--fix`/`--all`/`--auto` 路由的规范分发接缝 |
+| `code-review-flags.cjs` | `/gsd-code-review` 的类型化标志解析器；导出 `parseCodeReviewFlags(argv)`（→ `{ fix, all, auto, depth, files }`）和 `resolveCodeReviewWorkflow(flags)`（→ `'code-review.md' \| 'code-review-fix.md'`）；`--fix`/`--all`/`--auto` 路由的规范分发接缝 |
 | `command-aliases.cjs` | 清单支持的族路由器的别名/子命令元数据 |
 | `command-arg-projection.cjs` | 跨命令族路由器共享的类型化标志和位置参数投影帮助器 |
 | `command-routing-hub.cjs` | 纯结果分发中心，集中了所有命令族路由器的模式决策（SDK vs CJS）、错误分类和无抛出契约（#3788） |
@@ -396,7 +395,7 @@
 | `decisions.cjs` | 解析 CONTEXT.md `<decisions>` 块；接受数字（D-42）和字母数字（D-INFRA-01）ID；返回 `{id, text, category, tags, trackable}` |
 | `docs.cjs` | 文档更新工作流初始化、Markdown 扫描、单体仓库检测 |
 | `drift.cjs` | 执行后代码库结构漂移检测器（#2003）：将文件更改分类为新目录/桶/迁移/路由类别，并循环处理 `last_mapped_commit` frontmatter |
-| `fallow-runner.cjs` | `/gsd-code-review` 的 fallow 审计适配器：二进制解析（`PATH` 然后 `node_modules/.bin`）、可操作的缺少二进制错误和结构性发现规范化 |
+| `fallow-runner.cjs` | `/gsd-code-review` 的 fallow 审计适配器：二进制解析（`node_modules/.bin` 然后 `PATH`）、可操作的缺少二进制错误和结构性发现规范化 |
 | `frontmatter.cjs` | YAML frontmatter 增删改查操作 |
 | `gap-checker.cjs` | 规划后间隙分析（#2493）：REQUIREMENTS.md + CONTEXT.md 决策 vs PLAN.md 覆盖率报告（`gsd-tools gap-analysis`） |
 | `graphify.cjs` | `/gsd-graphify` 的知识图谱构建/查询/状态/差异 |
@@ -444,7 +443,7 @@
 | `template.cjs` | 带变量替换的模板选择和填充 |
 | `uat.cjs` | UAT 文件解析、验证债务跟踪、audit-uat 支持 |
 | `ui-safety-gate.cjs` | 无 shell 的词边界 UI 令牌检测器（#3706，#3718）；从 stdin 读取阶段章节文本，退出 0（找到 UI）或 1（未找到 UI）；也部署到 `gsd-core/bin/lib/`，以便 GSD 安装程序将其传送到 `$RUNTIME_DIR`（#448） |
-| `update-context.cjs` | `/gsd:update` 的纯安装上下文解析器 — 从 update.md bash 移植的运行时/范围/配置目录/版本检测（LOCAL/GLOBAL/UNKNOWN）；支持 `gsd-tools update-context`（#498） |
+| `update-context.cjs` | `/gsd-update` 的纯安装上下文解析器 — 从 update.md bash 移植的运行时/范围/配置目录/版本检测（LOCAL/GLOBAL/UNKNOWN）；支持 `gsd-tools update-context`（#498） |
 | `validate-command-router.cjs` | `gsd-tools validate` 的轻量 CJS 子命令路由适配器 |
 | `validate.cjs` | 纯阶段变体规范化帮助器（`phaseVariants`、`buildRoadmapPhaseVariants`、`buildNotStartedPhaseVariants`），被 `verify.cjs` 用于 W006/W007 检查；无 I/O，无异步 |
 | `verify-command-router.cjs` | `gsd-tools verify` 的轻量 CJS 子命令路由适配器 |
@@ -475,6 +474,7 @@
 | `gsd-read-guard.js` | `PreToolUse` | 防止对未读文件执行 Edit/Write 的建议性守卫 |
 | `gsd-read-injection-scanner.js` | `PostToolUse` | 扫描工具 Read 结果中的提示注入模式（v1.36+，PR #2201） |
 | `gsd-worktree-path-guard.js` | `PreToolUse` | 硬性阻止对 worktree 根目录之外绝对路径执行 Edit/Write/MultiEdit（PR #579，#260） |
+| `gsd-agent-isolation-guard.js` | `PreToolUse` | 当项目解析出的调度隔离模式为 `harness-worktree` 时，硬性阻止缺少隔离参数的 executor `Agent()` 调度（#3045） |
 | `gsd-write-guard.js` | `PreToolUse` | 硬性阻止将精选的 `.planning/` 工件（ROADMAP.md、里程碑路线图、STATE.md）灾难性缩减的整文件 `Write`；可通过一次性哨兵文件 `.planning/.gsd-allow-shrink`（工作流步骤）或 `GSD_ALLOW_PLANNING_SHRINK=1`（交互式）覆盖（#2255，#973 的修复 3） |
 | `gsd-session-state.sh` | `PostToolUse` | 基于 shell 运行时的会话状态跟踪 |
 | `gsd-validate-commit.sh` | `PostToolUse` | 常规提交强制执行的提交验证 |

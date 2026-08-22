@@ -24,6 +24,7 @@ command -v opencode >/dev/null 2>&1 && echo "opencode:available" || echo "openco
 command -v qwen >/dev/null 2>&1 && echo "qwen:available" || echo "qwen:missing"
 command -v cursor-agent >/dev/null 2>&1 && echo "cursor:available" || echo "cursor:missing"
 command -v agy >/dev/null 2>&1 && echo "antigravity:available" || echo "antigravity:missing"
+command -v kimi >/dev/null 2>&1 && echo "kimi-code:available" || echo "kimi-code:missing"
 
 # Check local model servers (OpenAI-compatible HTTP API — no CLI binary required)
 OLLAMA_HOST=$(gsd_run query config-get review.ollama_host --raw 2>/dev/null || echo "")
@@ -75,6 +76,7 @@ Parse flags from `$ARGUMENTS`:
 - `--qwen` → include Qwen Code
 - `--cursor` → include Cursor
 - `--agy` or `--antigravity` → include Antigravity CLI
+- `--kimi-code` → include Kimi CLI
 - `--ollama` → include Ollama (local server, OpenAI-compatible)
 - `--lm-studio` → include LM Studio (local server, OpenAI-compatible)
 - `--llama-cpp` → include llama.cpp (local server, OpenAI-compatible)
@@ -105,10 +107,9 @@ user who wants a preferred set has `review.default_reviewers`. Both stay lenient
   preference evaluated across many hosts, so a subset being present is expected, not an error
 - If all configured reviewers are unavailable, fail with an actionable message
 
-**Reviewer instances (#1517, optional):** if `review.reviewer_instances` is configured,
-instance names in `review.default_reviewers` run as independent identities. Resolution rules
-are in `gsd-core/references/reviewer-instances.md` — load it lazily only when instances are
-configured. Unconfigured → default path unchanged.
+<!-- gsd:section id="reviewer-instances-note-1" when="state:reviewer-instances-configured" -->
+If `section_manifest` is `null` or `"reviewer-instances-note-1"` is in its `included` list: read and execute `gsd-core/workflows/review/steps/reviewer-instances-note-1.md`. Otherwise skip — do not read the file.
+<!-- /gsd:section -->
 
 If no CLIs are available:
 ```
@@ -156,7 +157,7 @@ Rules:
 Collect phase artifacts for the review prompt:
 
 ```bash
-INIT=$(gsd_run query init.phase-op "${PHASE_ARG}")
+INIT=$(gsd_run query init.review "${PHASE_ARG}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
 # #2358: ONE run-scoped temp dir (portable via ${TMPDIR:-/tmp}) so overlapping
@@ -243,6 +244,9 @@ Write to a temp file: `{run_dir}/gsd-review-prompt.md`
 Also write individual section files so the budget tool can re-trim per reviewer:
 
 ```bash
+# #2962: zsh aborts the block on an unmatched for-list glob (nomatch); bash passes it through. nullglob both.
+shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
+
 RUN_DIR="{run_dir}"   # from gather_context
 
 # Write individual section files for per-reviewer budget trimming
@@ -262,11 +266,13 @@ done
 if [ -f ".planning/PROJECT.md" ]; then
   cp .planning/PROJECT.md "${RUN_DIR}/gsd-review-project.md"
 fi
-if ls "${PHASE_DIR}/"*"-CONTEXT.md" >/dev/null 2>&1; then
-  cat "${PHASE_DIR}/"*"-CONTEXT.md" > "${RUN_DIR}/gsd-review-context.md"
+_CTX=( "${PHASE_DIR}"/*-CONTEXT.md )
+if [ ${#_CTX[@]} -gt 0 ]; then
+  cat "${_CTX[@]}" > "${RUN_DIR}/gsd-review-context.md"
 fi
-if ls "${PHASE_DIR}/"*"-RESEARCH.md" >/dev/null 2>&1; then
-  cat "${PHASE_DIR}/"*"-RESEARCH.md" > "${RUN_DIR}/gsd-review-research.md"
+_RESEARCH=( "${PHASE_DIR}"/*-RESEARCH.md )
+if [ ${#_RESEARCH[@]} -gt 0 ]; then
+  cat "${_RESEARCH[@]}" > "${RUN_DIR}/gsd-review-research.md"
 fi
 if [ -f ".planning/REQUIREMENTS.md" ]; then
   cp .planning/REQUIREMENTS.md "${RUN_DIR}/gsd-review-requirements.md"
@@ -306,13 +312,16 @@ An environment that genuinely hits an untrusted-hook prompt surfaces through the
 the empty-output stub as a dropped lane with diagnosable stderr, not silent attrition. Do not
 reintroduce the flag (even spelled out in prose — a regression test bans the literal file-wide).
 
-**Reviewer instances (#1517, optional):** instances resolve *through* a lane and are not lanes
-themselves (ADR-2782 D8). Each selected instance invokes its base `cli` with its own `model`/`agent`
-as opaque argv. Exact invocation in `gsd-core/references/reviewer-instances.md`.
+<!-- gsd:section id="reviewer-instances-note-2" when="state:reviewer-instances-configured" -->
+If `section_manifest` is `null` or `"reviewer-instances-note-2"` is in its `included` list: read and execute `gsd-core/workflows/review/steps/reviewer-instances-note-2.md`. Otherwise skip — do not read the file.
+<!-- /gsd:section -->
 
 Lanes run **sequentially, not in parallel** — concurrent invocation trips provider rate limits.
 
 ```bash
+# #2962: zsh aborts the block on an unmatched for-list glob (nomatch); bash passes it through. nullglob both.
+shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
+
 RUN_DIR="{run_dir}"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 # SELECTED_REVIEWERS is the comma-separated result of reviewer selection (ADR-0011 precedence:
@@ -414,12 +423,31 @@ names, each gets its own `## <Adapter> Review (<instance>)` section, and ≥2 sa
 instances print a one-line shared-adapter caveat. Format in
 `gsd-core/references/reviewer-instances.md`.
 
+**Resolved model (#2295):** each lane's `review-lane invoke --json` line in
+`{run_dir}/gsd-review-lane-results.jsonl` carries a `model` object; render `models:` from
+its `value` and `model_sources:` from its `source`. Both maps carry exactly one entry per
+reviewer that appears in `reviewers:` — the two key sets always match. Write the literal
+`unknown` rather than omitting a key: an omitted key is indistinguishable from the feature
+not having run, and a reader must be able to tell *no model recorded* from *nothing to
+look at*. Emit every `models:`/`model_sources:` value as a DOUBLE-QUOTED YAML scalar — a
+legitimate model id can contain `:` (`llama3:70b`, `qwen2.5:7b`), which is unquotable as a
+bare scalar; a control character is already refused at the recording seam, so quoting is
+what closes the remaining `:`/`#`/leading-`-` cases. When GSD applied a reasoning effort to
+a lane, its `value` already carries a `(reasoning=<level>)` suffix (e.g.
+`gpt-5.6-sol (reasoning=high)`) — render it as-is, without re-deriving or re-formatting it.
+
 ```markdown
 ---
 phase: {N}
 reviewers: [gemini, claude, codex, coderabbit, opencode, qwen, cursor, antigravity, ollama, lm_studio, llama_cpp]  # populate at runtime with only the reviewers actually invoked
 reviewed_at: {ISO timestamp}
 plans_reviewed: [{list of PLAN.md files}]
+models:                   # resolved model per reviewer; `unknown` when not recoverable
+  codex: "gpt-5.6-sol (reasoning=low)"
+  antigravity: "unknown"
+model_sources:            # how each value above was determined
+  codex: "banner"
+  antigravity: "unknown"
 trimmed_reviewers:        # only present if at least one reviewer was trimmed
   ollama:
     budget: 6000
@@ -457,7 +485,7 @@ trimmed_reviewers:        # only present if at least one reviewer was trimmed
 
 ## Consensus Summary
 
-{synthesize common concerns across all reviewers. CodeRabbit is a diff-only reviewer (it never received the source-grounding prompt), so do not weight its verdict as a grounded plan review — fold in its diff findings, but base plan-level consensus on the prompt-fed reviewers. A reviewer output carrying the `[reviewed-without-repo-access]` marker (or beginning with `REVIEWED-WITHOUT-REPO-ACCESS`) ran without repo access (#2176) — treat it the same way: note its concerns, but do not count its verdict at full consensus weight.}
+{synthesize common concerns across all reviewers. CodeRabbit is a diff-only reviewer (it never received the source-grounding prompt), so do not weight its verdict as a grounded plan review — fold in its diff findings, but base plan-level consensus on the prompt-fed reviewers. A reviewer output carrying the `[reviewed-without-repo-access]` marker (or beginning with `REVIEWED-WITHOUT-REPO-ACCESS`) ran without repo access (#2176) — treat it the same way: note its concerns, but do not count its verdict at full consensus weight. A reviewer output carrying the `[reviewed-without-source-citations]` marker (#3194) declared source-grounded evidence but cited no `file:line` evidence, so it reviewed the plan text only — treat it the same way: note its concerns, but do not count its verdict at full consensus weight.}
 
 ### Agreed Strengths
 {strengths mentioned by 2+ reviewers}

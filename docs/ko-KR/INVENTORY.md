@@ -6,7 +6,7 @@
 
 - 여기의 수량은 v1.36.0 핀 기준 파일시스템에서 도출된 것으로, 릴리스 사이에 변동될 수 있습니다. 최신 수량을 확인하려면 체크아웃에서 `ls commands/gsd/*.md | wc -l`, `ls agents/gsd-*.md | wc -l` 등을 실행하세요.
 - 이 파일은 6개 패밀리(에이전트, 명령어, 워크플로우, 레퍼런스, CLI 모듈, 훅) 전반에 걸쳐 출시된 모든 표면을 열거합니다. 광범위 문서는 내러티브 또는 엄선된 하위 집합을 렌더링할 수 있습니다. 파일시스템과 불일치할 경우 이 파일과 디렉터리 목록이 권위 있는 출처입니다.
-- v1.36.0 이후 추가된 새 표면은 먼저 여기에 기록된 후 광범위 문서로 전파되어야 합니다. `tests/inventory-counts.test.cjs`, `tests/commands-doc-parity.test.cjs`, `tests/agents-doc-parity.test.cjs`, `tests/cli-modules-doc-parity.test.cjs`, `tests/hooks-doc-parity.test.cjs`, `tests/architecture-counts.test.cjs`, `tests/command-count-sync.test.cjs`의 드리프트 제어 테스트가 파일시스템 대비 수량 및 목록 내용을 고정합니다.
+- v1.36.0 이후 추가된 새 표면은 먼저 여기에 기록된 후 광범위 문서로 전파되어야 합니다. `tests/inventory-manifest-sync.test.cjs`의 드리프트 제어 테스트가 파일시스템 대비 로스터 내용을 고정합니다.
 
 이것은 출시된 모든 GSD Core 표면의 공식 목록입니다. 주제별 탐색은 [문서 색인](README.md)을 참조하세요.
 
@@ -189,7 +189,6 @@
 | `code-review.md` | gsd-code-reviewer를 통한 단계 소스 변경 검토; REVIEW.md 생성. | `/gsd-code-review` |
 | `complete-milestone.md` | 출시된 버전을 완료로 표시 — MILESTONES.md 항목, PROJECT.md 발전, 태그. | `/gsd-complete-milestone` |
 | `diagnose-issues.md` | UAT 공백 조사 및 근본 원인 찾기를 위한 병렬 디버그 에이전트 오케스트레이션. | `/gsd-verify-work` (자동 진단) |
-| `discovery-phase.md` | 적절한 깊이 수준에서 탐색 실행. | `/gsd-new-project` (탐색 경로) |
 | `discuss-phase-assumptions.md` | 가정 모드 discuss — 코드베이스 우선 분석을 통한 구현 결정 추출. | `/gsd-discuss-phase` (`discuss_mode=assumptions`일 때) |
 | `discuss-phase-power.md` | 파워 유저 discuss — 모든 질문을 JSON 상태 파일 + HTML UI로 사전 생성. | `/gsd-discuss-phase --power` |
 | `discuss-phase.md` | 반복적인 회색 지대 토론을 통한 구현 결정 추출. | `/gsd-discuss-phase` |
@@ -259,10 +258,9 @@
 | `thread.md` | 세션 간 작업을 위한 영속 컨텍스트 스레드 생성, 목록, 닫기, 재개. | `/gsd-thread` |
 | `update.md` | 체인지로그 표시와 함께 GSD를 최신 버전으로 업데이트. | `/gsd-update` |
 | `validate-phase.md` | 완료된 단계의 나이퀴스트 검증 공백을 소급 감사 및 채움. | `/gsd-validate-phase` |
-| `verify-phase.md` | 목표 역방향 분석을 통한 단계 목표 달성 검증. | `execute-phase.md` (실행 후) |
 | `verify-work.md` | 자동 진단이 포함된 대화형 UAT — UAT.md 및 수정 계획 생성. | `/gsd-verify-work` |
 
-> **참고:** 일부 워크플로우는 직접적인 사용자 대면 명령어가 없습니다(예: `execute-plan.md`, `verify-phase.md`, `transition.md`, `node-repair.md`, `diagnose-issues.md`) — 이들은 오케스트레이터 워크플로우에 의해 내부적으로 호출됩니다. `discovery-phase.md`는 `/gsd-new-project`의 대체 진입점입니다.
+> **참고:** 일부 워크플로우는 직접적인 사용자 대면 명령어가 없습니다(예: `execute-plan.md`, `transition.md`, `node-repair.md`, `diagnose-issues.md`) — 이들은 오케스트레이터 워크플로우에 의해 내부적으로 호출됩니다.
 
 ---
 
@@ -280,6 +278,7 @@
 | `model-profile-resolution.md` | 모델 해석 알고리즘 문서. |
 | `verification-patterns.md` | 다양한 아티팩트 유형 검증 방법. |
 | `verification-overrides.md` | 아티팩트별 검증 재정의 규칙. |
+| `verifier-phase-gates.md` | gsd-verifier가 즉시 로드하는 검증 시점 게이트(폐기된 verify-phase 워크플로우에서 이전, #1892): 의사결정 커버리지 검증(#2492), 테스트 품질 감사, 인프라 페이즈 human-verification 스코핑(#2504). | |
 | `planning-config.md` | 전체 설정 스키마 및 동작. |
 | `git-integration.md` | Git 커밋, 브랜칭, 히스토리 패턴. |
 | `git-planning-commit.md` | 계획 디렉터리 커밋 관례. |
@@ -382,7 +381,7 @@
 | `cjs-command-router-adapter.cjs` | 매니페스트 기반 CJS 명령어 패밀리 라우터를 위한 공유 호환성 어댑터 |
 | `clock.cjs` | 결정론적 잠금 테스트를 위한 주입 가능한 클록 심(now/sleep) |
 | `clusters.cjs` | 런타임 표면 모듈을 위한 스킬 클러스터 정의(ADR-0011 Phase 2) |
-| `code-review-flags.cjs` | `/gsd:code-review`를 위한 타입 플래그 파서; `parseCodeReviewFlags(argv)` (→ `{ fix, all, auto, depth, files }`) 및 `resolveCodeReviewWorkflow(flags)` (→ `'code-review.md' \| 'code-review-fix.md'`) 내보내기; `--fix`/`--all`/`--auto` 라우팅을 위한 표준 디스패치 심 |
+| `code-review-flags.cjs` | `/gsd-code-review`를 위한 타입 플래그 파서; `parseCodeReviewFlags(argv)` (→ `{ fix, all, auto, depth, files }`) 및 `resolveCodeReviewWorkflow(flags)` (→ `'code-review.md' \| 'code-review-fix.md'`) 내보내기; `--fix`/`--all`/`--auto` 라우팅을 위한 표준 디스패치 심 |
 | `command-aliases.cjs` | 매니페스트 기반 패밀리 라우터를 위한 별칭/하위 명령어 메타데이터 |
 | `command-arg-projection.cjs` | 명령어 패밀리 라우터 전반에 공유되는 타입 플래그 및 위치 인수 프로젝션 헬퍼 |
 | `command-routing-hub.cjs` | 모든 명령어 패밀리 라우터를 위한 모드 결정(SDK vs CJS), 오류 분류, 예외 없음 계약을 집중화하는 순수 결과 디스패치 허브(#3788) |
@@ -396,7 +395,7 @@
 | `decisions.cjs` | CONTEXT.md `<decisions>` 블록 파싱; 숫자형(D-42) 및 영숫자형(D-INFRA-01) ID 허용; `{id, text, category, tags, trackable}` 반환 |
 | `docs.cjs` | 문서 업데이트 워크플로우 초기화, 마크다운 스캔, 모노레포 감지 |
 | `drift.cjs` | 실행 후 코드베이스 구조 드리프트 감지기(#2003): 파일 변경을 new-dir/barrel/migration/route 카테고리로 분류하고 `last_mapped_commit` 프론트매터를 왕복 처리 |
-| `fallow-runner.cjs` | `/gsd-code-review`를 위한 Fallow 감사 어댑터: 바이너리 해석(`PATH` 이후 `node_modules/.bin`), 실행 가능한 누락 바이너리 오류, 구조적 결과 정규화 |
+| `fallow-runner.cjs` | `/gsd-code-review`를 위한 Fallow 감사 어댑터: 바이너리 해석(`node_modules/.bin` 이후 `PATH`), 실행 가능한 누락 바이너리 오류, 구조적 결과 정규화 |
 | `frontmatter.cjs` | YAML 프론트매터 CRUD 작업 |
 | `gap-checker.cjs` | 계획 후 공백 분석(#2493): REQUIREMENTS.md + CONTEXT.md 결정 대 PLAN.md 커버리지 보고서(`gsd-tools gap-analysis`) |
 | `graphify.cjs` | `/gsd-graphify`를 위한 지식 그래프 빌드/쿼리/상태/비교 |
@@ -444,7 +443,7 @@
 | `template.cjs` | 변수 치환을 통한 템플릿 선택 및 채우기 |
 | `uat.cjs` | UAT 파일 파싱, 검증 부채 추적, audit-uat 지원 |
 | `ui-safety-gate.cjs` | 셸 없는 단어 경계 UI 토큰 감지기(#3706, #3718); stdin에서 단계 섹션 텍스트를 읽어 0(UI 발견) 또는 1(UI 없음) 종료; GSD 설치 프로그램이 `$RUNTIME_DIR`에 배포하도록 `gsd-core/bin/lib/`에도 배포 |
-| `update-context.cjs` | `/gsd:update`를 위한 순수 설치 컨텍스트 해석기 — update.md bash에서 포팅된 런타임/범위/설정 디렉터리/버전 감지(LOCAL/GLOBAL/UNKNOWN); `gsd-tools update-context` 지원(#498) |
+| `update-context.cjs` | `/gsd-update`를 위한 순수 설치 컨텍스트 해석기 — update.md bash에서 포팅된 런타임/범위/설정 디렉터리/버전 감지(LOCAL/GLOBAL/UNKNOWN); `gsd-tools update-context` 지원(#498) |
 | `validate-command-router.cjs` | `gsd-tools validate`를 위한 얇은 CJS 하위 명령어 라우터 어댑터 |
 | `validate.cjs` | 순수 단계 변형 정규화 헬퍼(`phaseVariants`, `buildRoadmapPhaseVariants`, `buildNotStartedPhaseVariants`), W006/W007 확인을 위해 `verify.cjs`에서 사용; I/O 없음, 비동기 없음 |
 | `verify-command-router.cjs` | `gsd-tools verify`를 위한 얇은 CJS 하위 명령어 라우터 어댑터 |
@@ -475,6 +474,7 @@
 | `gsd-read-guard.js` | `PreToolUse` | 읽지 않은 파일에 대한 Edit/Write를 방지하는 어드바이저리 가드 |
 | `gsd-read-injection-scanner.js` | `PostToolUse` | 도구 Read 결과에서 프롬프트 주입 패턴 스캔 (v1.36+, PR #2201) |
 | `gsd-worktree-path-guard.js` | `PreToolUse` | 워크트리 루트 외부의 절대 경로로 Edit/Write/MultiEdit를 하드 차단 (PR #579, #260) |
+| `gsd-agent-isolation-guard.js` | `PreToolUse` | 프로젝트의 해석된 디스패치 격리가 `harness-worktree`일 때 하네스 격리 매개변수가 누락된 executor `Agent()` 디스패치를 하드 차단 (#3045) |
 | `gsd-write-guard.js` | `PreToolUse` | 큐레이션된 `.planning/` 아티팩트(ROADMAP.md, 마일스톤 로드맵, STATE.md)를 치명적으로 축소하는 전체 파일 `Write`를 하드 차단. 일회용 센티널 `.planning/.gsd-allow-shrink`(워크플로 단계) 또는 `GSD_ALLOW_PLANNING_SHRINK=1`(대화형)로 우회 가능 (#2255, #973의 수정 3) |
 | `gsd-session-state.sh` | `PostToolUse` | 셸 기반 런타임을 위한 세션 상태 추적 |
 | `gsd-validate-commit.sh` | `PostToolUse` | 컨벤셔널 커밋 적용을 위한 커밋 검증 |

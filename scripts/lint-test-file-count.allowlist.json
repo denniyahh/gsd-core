@@ -1,5 +1,5 @@
 {
-  "_doc": "Baseline of modules currently exceeding the 2-test-file limit. Each entry locks in TODAY's exact test filenames as the allowlisted set (identity ratchet). Adding a NEW test file to a capped module fails (novel). Removing one requires pruning this list (stale, ratchet-down). When a cluster drops to ≤ 2, remove its entry entirely. New entries require justification in PR description.",
+  "_doc": "Baseline of modules currently exceeding the 2-test-file limit. Each entry locks in TODAY's exact test filenames as the allowlisted set (identity ratchet). Adding a NEW test file to a capped module fails (novel). Removing one requires pruning this list (stale, ratchet-down). When a cluster drops to \u2264 2, remove its entry entirely. New entries require justification in PR description.",
   "modules": {
     "config": {
       "files": [
@@ -7,6 +7,7 @@
         "config-field-docs.test.cjs",
         "config-get-default.test.cjs",
         "config-schema.property.test.cjs",
+        "config-validation.test.cjs",
         "config.test.cjs"
       ],
       "issue": "TBD"
@@ -22,18 +23,41 @@
       ],
       "issue": "622"
     },
+    "init": {
+      "files": [
+        "init-debug-workflow-contract.test.cjs",
+        "init-debug.test.cjs",
+        "init-manager.test.cjs",
+        "init.test.cjs"
+      ],
+      "issue": "3149"
+    },
     "milestone": {
       "files": [
+        "milestone-archive-hygiene.test.cjs",
         "milestone-archive.test.cjs",
         "milestone-helper.test.cjs",
         "milestone-prefixed-convention.test.cjs",
         "milestone-summary.test.cjs",
+        "milestone-window-drift-guard.test.cjs",
+        "milestone-window-single-owner.test.cjs",
         "milestone.test.cjs"
       ],
-      "issue": "TBD"
+      "issue": "3216"
+    },
+    "phase": {
+      "files": [
+        "phase-completion-single-owner.test.cjs",
+        "phase-dependency-levels.test.cjs",
+        "phase-resolution-parity.test.cjs",
+        "phase-structure.test.cjs",
+        "phase.test.cjs"
+      ],
+      "issue": "3186"
     },
     "roadmap": {
       "files": [
+        "roadmap-disk-consistency.test.cjs",
         "roadmap-mode-field.test.cjs",
         "roadmap-phase-fallback.test.cjs",
         "roadmap.test.cjs"
@@ -45,9 +69,10 @@
         "runtime-artifact-layout-descriptor-drive.test.cjs",
         "runtime-artifact-layout-install-profiles.test.cjs",
         "runtime-artifact-layout-surface.test.cjs",
+        "runtime-artifact-layout-trigger-surface.test.cjs",
         "runtime-artifact-layout.test.cjs"
       ],
-      "issue": "TBD"
+      "issue": "2871"
     },
     "security": {
       "files": [
@@ -62,9 +87,12 @@
       "files": [
         "state-acquirestatelock-non-eexist.test.cjs",
         "state-command-cutover.test.cjs",
+        "state-consistency.test.cjs",
+        "state-field-drift.test.cjs",
         "state-prune.test.cjs",
         "state-rebuild-cli.test.cjs",
         "state-rebuild.test.cjs",
+        "state-write-path-drift-guard.test.cjs",
         "state.test.cjs"
       ],
       "issue": "180"
@@ -78,7 +106,8 @@
         "verify-work-auto-transition.test.cjs",
         "verify.test.cjs"
       ],
-      "issue": "3767"
+      "issue": "3767",
+      "justification": "verify-command-grounding added by #2401/#3678; allowlist follow-up landed with #3606 (base was red on this lane)."
     },
     "install": {
       "files": [

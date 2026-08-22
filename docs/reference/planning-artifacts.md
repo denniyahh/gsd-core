@@ -198,13 +198,13 @@ actuals:
   commits: 7
 ```
 
-`tokens` uses the **same scale as the estimate**, not a harness-reported token count — an executor subagent cannot read its own consumption, and a ratio between two different measurement methods would measure the methods rather than the miss. `/gsd:extract-learnings` pairs each phase's estimate with its actuals via `gsd_run query estimate-calibrate`, writes `.planning/estimation-calibration.json`, and the planner applies the resulting factor to subsequent estimates. Additive and optional: a summary without `actuals` simply contributes no calibration sample.
+`tokens` uses the **same scale as the estimate**, not a harness-reported token count — an executor subagent cannot read its own consumption, and a ratio between two different measurement methods would measure the methods rather than the miss. `/gsd-extract-learnings` pairs each phase's estimate with its actuals via `gsd_run query estimate-calibrate`, writes `.planning/estimation-calibration.json`, and the planner applies the resulting factor to subsequent estimates. Additive and optional: a summary without `actuals` simply contributes no calibration sample.
 
 ### `<NN>-VERIFICATION.md`
 
 | | |
 |---|---|
-| **Purpose** | Phase goal verification report. Checks `must_haves.truths`, `must_haves.artifacts`, and `must_haves.key_links` from all plans against the actual codebase after execution. Records `status: passed \| gaps_found \| human_needed`. A truth whose correctness depends on runtime behaviour — a state transition or a cancellation/cleanup/ordering invariant — is marked `⚠️ PRESENT_BEHAVIOR_UNVERIFIED` (not `VERIFIED`) when no test exercises it: it is excluded from `score`, counted in the `behavior_unverified` frontmatter field, and routed to `human_needed`, so a behaviour-dependent gap can no longer count toward a clean N/N. |
+| **Purpose** | Phase goal verification report. Checks `must_haves.truths`, `must_haves.artifacts`, and `must_haves.key_links` from all plans against the actual codebase after execution. Records `status: passed \| gaps_found \| human_needed`. A truth whose correctness depends on runtime behaviour — a state transition or a cancellation/cleanup/ordering invariant — is marked `⚠️ PRESENT_BEHAVIOR_UNVERIFIED` (not `VERIFIED`) when no test exercises it: it is excluded from `score`, counted in the `behavior_unverified` frontmatter field, and routed to `human_needed`, so a behaviour-dependent gap can no longer count toward a clean N/N. A truth that *does* reach `✓ VERIFIED` but holds for an incidental reason (`undeclared-precondition`, `incidental-ordering`, `fixture-only`) is qualified `✓ VERIFIED (coincidental-reliance)` and listed in `coincidental_reliance_items` — **advisory only**: it still counts toward `score`, does not change `status`, and emits no human-verification item (#1955). |
 | **Produced by** | `/gsd-verify-work` (or the verify step within `/gsd-execute-phase`). |
 | **Consumed by** | `plan-phase` closed-phase gate (a `status: passed` VERIFICATION.md marks the phase `Complete` and blocks replanning without `--force`); `/gsd-progress`; human review. |
 
@@ -245,7 +245,7 @@ actuals:
 | `status` | enum | Scheduler-agnostic lifecycle state (see below). |
 | `expected_artifacts` | string[] | Paths the job is expected to produce; verified before the plan is closed. |
 | `verification_command` | string | Command that verifies the job's output before close-out. |
-| `resume_command` | string | Exact command to resume GSD reconciliation (re-enter the loop to re-check the job), e.g. `/gsd:execute-phase <phase>`. This is a GSD reconciliation entry point, not a scheduler resubmit. |
+| `resume_command` | string | Exact command to resume GSD reconciliation (re-enter the loop to re-check the job), e.g. `/gsd-execute-phase <phase>`. This is a GSD reconciliation entry point, not a scheduler resubmit. |
 | `submitted_at` | string | ISO 8601 submission timestamp. |
 | `terminal_details` | object \| null | Failure/terminal-state detail; `null` while non-terminal. |
 

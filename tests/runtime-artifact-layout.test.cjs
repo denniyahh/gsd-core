@@ -26,7 +26,7 @@ const { resolveRuntimeArtifactLayout, findInstallSourceRoot } = require('../gsd-
 const capabilityRegistry = require('../gsd-core/bin/lib/capability-registry.cjs');
 const installProfiles = require('../gsd-core/bin/lib/install-profiles.cjs');
 const { install } = require('../bin/install.js');
-const { createTempDir, cleanup } = require('./helpers.cjs');
+const { createTempDir, cleanup, scrubConfigLocationEnv } = require('./helpers.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 
@@ -52,24 +52,38 @@ describe('resolveRuntimeArtifactLayout — claude local', () => {
 });
 
 describe('resolveRuntimeArtifactLayout — claude global', () => {
+  // #2875 Part 2: claude/global gained an `agents` kind — NOT new on-disk
+  // behavior. A `claude --global` install always wrote
+  // `<configDir>/agents/gsd-*.md` via the now-deleted inline agent-staging
+  // loop in bin/install.js (claude was never in the deleted
+  // `_DESCRIPTOR_AGENTS_RUNTIMES` set, and that loop ran unconditionally,
+  // independent of `_isSkillsRuntime`/scope). The descriptor previously never
+  // modeled that write; it now does, matching what was always materialized —
+  // which is also why the golden install-tree fixtures never moved (see
+  // tests/fixtures/install-tree/**): the on-disk bytes were unchanged, only
+  // the descriptor's own metadata became complete.
   test('returns correct layout for claude scope=global', () => {
     const layout = resolveRuntimeArtifactLayout('claude', FAKE_DIR, 'global');
     assert.strictEqual(layout.runtime, 'claude');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
+    assert.strictEqual(layout.kinds.length, 2);
     assert.strictEqual(layout.kinds[0].kind, 'skills');
     assert.strictEqual(layout.kinds[0].destSubpath, 'skills');
     assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
     assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+    assert.strictEqual(layout.kinds[1].kind, 'agents');
+    assert.strictEqual(layout.kinds[1].destSubpath, 'agents');
+    assert.strictEqual(layout.kinds[1].prefix, 'gsd-');
+    assert.strictEqual(typeof layout.kinds[1].stage, 'function');
   });
 });
 
 describe('resolveRuntimeArtifactLayout — cursor', () => {
-  test('returns correct layout for cursor — skills + commands + agents kinds (#785, ADR-1235)', () => {
+  test('returns correct layout for cursor — skills + agents only (#2644)', () => {
     const layout = resolveRuntimeArtifactLayout('cursor', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'cursor');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 3);
+    assert.strictEqual(layout.kinds.length, 2);
 
     const skillsKind = layout.kinds.find(k => k.kind === 'skills');
     assert.ok(skillsKind, 'must have a skills kind');
@@ -77,11 +91,8 @@ describe('resolveRuntimeArtifactLayout — cursor', () => {
     assert.strictEqual(skillsKind.prefix, 'gsd-');
     assert.strictEqual(typeof skillsKind.stage, 'function');
 
-    const commandsKind = layout.kinds.find(k => k.kind === 'commands');
-    assert.ok(commandsKind, 'must have a commands kind (#785 Cursor 1.6 slash commands)');
-    assert.strictEqual(commandsKind.destSubpath, 'commands');
-    assert.strictEqual(commandsKind.prefix, 'gsd-');
-    assert.strictEqual(typeof commandsKind.stage, 'function');
+    assert.equal(layout.kinds.find(k => k.kind === 'commands'), undefined,
+      'Cursor skills are the sole slash-menu surface; commands would duplicate them (#2644)');
 
     const agentsKind = layout.kinds.find(k => k.kind === 'agents');
     assert.ok(agentsKind, 'must have an agents kind (ADR-1235 §1 descriptor cutover)');
@@ -92,15 +103,23 @@ describe('resolveRuntimeArtifactLayout — cursor', () => {
 });
 
 describe('resolveRuntimeArtifactLayout — codex', () => {
+  // #2875 Part 2: agents kind added — codex was never in the deleted
+  // `_DESCRIPTOR_AGENTS_RUNTIMES` set, so the inline loop wrote codex agents
+  // too; the descriptor now models it. Codex's separate config.toml
+  // `[agents.gsd-*]` strip on a full→minimal downgrade is untouched.
   test('returns correct layout for codex', () => {
     const layout = resolveRuntimeArtifactLayout('codex', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'codex');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
+    assert.strictEqual(layout.kinds.length, 2);
     assert.strictEqual(layout.kinds[0].kind, 'skills');
     assert.strictEqual(layout.kinds[0].destSubpath, 'skills');
     assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
     assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+    assert.strictEqual(layout.kinds[1].kind, 'agents');
+    assert.strictEqual(layout.kinds[1].destSubpath, 'agents');
+    assert.strictEqual(layout.kinds[1].prefix, 'gsd-');
+    assert.strictEqual(typeof layout.kinds[1].stage, 'function');
   });
 
   test('#2429: codex local scope does not set $HOME/.agents skills home override', () => {
@@ -297,15 +316,23 @@ describe('resolveRuntimeArtifactLayout — kimi', () => {
 });
 
 describe('resolveRuntimeArtifactLayout — hermes', () => {
+  // #2875 Part 2: agents kind added — hermes was never in the deleted
+  // `_DESCRIPTOR_AGENTS_RUNTIMES` set, so the inline loop wrote hermes agents
+  // too (brand-swapped via the new named converter convertClaudeAgentToHermesAgent,
+  // whose rewrite data was already declared on hostBehaviors.brandingRewrites).
   test('returns correct layout for hermes', () => {
     const layout = resolveRuntimeArtifactLayout('hermes', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'hermes');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
+    assert.strictEqual(layout.kinds.length, 2);
     assert.strictEqual(layout.kinds[0].kind, 'skills');
     assert.strictEqual(layout.kinds[0].destSubpath, 'skills/gsd');
     assert.strictEqual(layout.kinds[0].prefix, 'gsd-'); // #947: restored canonical prefix
     assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+    assert.strictEqual(layout.kinds[1].kind, 'agents');
+    assert.strictEqual(layout.kinds[1].destSubpath, 'agents');
+    assert.strictEqual(layout.kinds[1].prefix, 'gsd-');
+    assert.strictEqual(typeof layout.kinds[1].stage, 'function');
   });
 });
 
@@ -337,31 +364,44 @@ describe('resolveRuntimeArtifactLayout — codebuddy', () => {
 });
 
 describe('resolveRuntimeArtifactLayout — cline', () => {
+  // #2875 Part 2: agents kind added to cline/global — cline was never in the
+  // deleted `_DESCRIPTOR_AGENTS_RUNTIMES` set, so the inline loop wrote cline
+  // agents too, via convertClaudeAgentToClineAgent.
   test('returns correct layout for cline global (skills-capable since v3.48.0 — #782)', () => {
     const layout = resolveRuntimeArtifactLayout('cline', FAKE_DIR, 'global');
     assert.strictEqual(layout.runtime, 'cline');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
+    assert.strictEqual(layout.kinds.length, 2);
     assert.strictEqual(layout.kinds[0].kind, 'skills');
     assert.strictEqual(layout.kinds[0].destSubpath, 'skills');
     assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
     assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+    assert.strictEqual(layout.kinds[1].kind, 'agents');
+    assert.strictEqual(layout.kinds[1].destSubpath, 'agents');
+    assert.strictEqual(layout.kinds[1].prefix, 'gsd-');
+    assert.strictEqual(typeof layout.kinds[1].stage, 'function');
   });
 
-  test('cline local: no skills kinds (global-only, #782)', () => {
+  test('cline local: no skills kind (skills are global-only, #782); agents kind present (#2875 Part 2 defect fix, cline-local agents-drop regression)', () => {
     const layout = resolveRuntimeArtifactLayout('cline', FAKE_DIR, 'local');
     assert.strictEqual(layout.runtime, 'cline');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 0);
+    const kindNames = layout.kinds.map((k) => k.kind).sort();
+    assert.deepStrictEqual(kindNames, ['agents'], 'cline local must declare only the agents kind — no skills kind');
   });
 });
 
 describe('resolveRuntimeArtifactLayout — opencode', () => {
-  test('returns commands + skills layout for opencode (#784)', () => {
+  // #2875 Part 2: agents kind added — opencode/kilo's agents were previously
+  // written by a code path entirely separate from this layout
+  // (installOpencodeFamilyArtifacts's bespoke writers never called
+  // resolveRuntimeArtifactLayout for agents); installAgentsKindStandalone now
+  // covers them through the SAME descriptor this layout resolves.
+  test('returns commands + skills + agents layout for opencode (#784)', () => {
     const layout = resolveRuntimeArtifactLayout('opencode', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'opencode');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 2);
+    assert.strictEqual(layout.kinds.length, 3);
 
     const commands = layout.kinds.find((k) => k.kind === 'commands');
     assert.ok(commands, 'should have a commands kind');
@@ -376,15 +416,23 @@ describe('resolveRuntimeArtifactLayout — opencode', () => {
     assert.strictEqual(skills.destSubpath, 'skills');
     assert.strictEqual(skills.prefix, 'gsd-');
     assert.strictEqual(typeof skills.stage, 'function');
+
+    const agents = layout.kinds.find((k) => k.kind === 'agents');
+    assert.ok(agents, 'should have an agents kind');
+    assert.strictEqual(agents.destSubpath, 'agents');
+    assert.strictEqual(agents.prefix, 'gsd-');
+    assert.strictEqual(typeof agents.stage, 'function');
   });
 });
 
 describe('resolveRuntimeArtifactLayout — kilo', () => {
-  test('returns commands + skills layout for kilo (#784)', () => {
+  // #2875 Part 2: agents kind added — same reason as opencode above (kilo
+  // shares the combined-family install shape).
+  test('returns commands + skills + agents layout for kilo (#784)', () => {
     const layout = resolveRuntimeArtifactLayout('kilo', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'kilo');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 2);
+    assert.strictEqual(layout.kinds.length, 3);
 
     const commands = layout.kinds.find((k) => k.kind === 'commands');
     assert.ok(commands, 'should have a commands kind');
@@ -397,6 +445,12 @@ describe('resolveRuntimeArtifactLayout — kilo', () => {
     assert.strictEqual(skills.destSubpath, 'skills');
     assert.strictEqual(skills.prefix, 'gsd-');
     assert.strictEqual(typeof skills.stage, 'function');
+
+    const agents = layout.kinds.find((k) => k.kind === 'agents');
+    assert.ok(agents, 'should have an agents kind');
+    assert.strictEqual(agents.destSubpath, 'agents');
+    assert.strictEqual(agents.prefix, 'gsd-');
+    assert.strictEqual(typeof agents.stage, 'function');
   });
 });
 
@@ -416,17 +470,21 @@ describe('resolveRuntimeArtifactLayout edge-cases', () => {
     assert.ok(kindNames.includes('agents'), 'should have agents kind');
   });
 
-  test('cursor has both skills and commands kinds (#785)', () => {
+  test('cursor has a skills kind and no commands kind (#2644)', () => {
     const layout = resolveRuntimeArtifactLayout('cursor', '/tmp/x');
     const kindNames = layout.kinds.map(k => k.kind);
     assert.ok(kindNames.includes('skills'), 'cursor must have skills kind');
-    assert.ok(kindNames.includes('commands'), 'cursor must have commands kind (#785 Cursor 1.6)');
+    assert.ok(!kindNames.includes('commands'), 'cursor commands kind would duplicate skill menu entries');
   });
 
-  test('claude global has only skills kind', () => {
+  // #2875 Part 2: claude/global now also declares an `agents` kind (see the
+  // 'resolveRuntimeArtifactLayout — claude global' describe block above for
+  // the full "was this new on-disk behavior?" determination — it is not).
+  test('claude global has skills and agents kinds', () => {
     const layout = resolveRuntimeArtifactLayout('claude', '/tmp/x', 'global');
-    assert.strictEqual(layout.kinds.length, 1);
+    assert.strictEqual(layout.kinds.length, 2);
     assert.strictEqual(layout.kinds[0].kind, 'skills');
+    assert.strictEqual(layout.kinds[1].kind, 'agents');
   });
 
   test('unknown runtime grok throws TypeError containing runtime name', () => {
@@ -657,39 +715,11 @@ describe('stage — opencode/kilo skills kind (#784)', () => {
   }
 });
 
-describe('stage — cursor commands kind (#785)', () => {
-  test('cursor commands kind stage returns directory with converted .md files', () => {
+describe('stage — cursor retired commands kind (#2644)', () => {
+  test('cursor layout exposes no commands staging surface', () => {
     const layout = resolveRuntimeArtifactLayout('cursor', FAKE_STAGE_DIR);
     const commandsKind = layout.kinds.find(k => k.kind === 'commands');
-    assert.ok(commandsKind, 'cursor should have a commands kind (#785)');
-
-    const stagedDir = commandsKind.stage(PROFILE_CORE);
-    assert.ok(fs.existsSync(stagedDir), 'stagedDir must exist');
-
-    const entries = fs.readdirSync(stagedDir).filter(f => f.endsWith('.md'));
-    assert.ok(entries.length >= 1, 'at least one command file should be staged');
-
-    // Cursor commands are plain markdown — no YAML frontmatter
-    for (const entry of entries) {
-      const content = fs.readFileSync(path.join(stagedDir, entry), 'utf8');
-      assert.ok(!content.startsWith('---'), `${entry}: cursor commands must not start with YAML frontmatter`);
-    }
-  });
-
-  test('cursor commands stage applies Cursor-specific content transforms', () => {
-    const layout = resolveRuntimeArtifactLayout('cursor', FAKE_STAGE_DIR);
-    const commandsKind = layout.kinds.find(k => k.kind === 'commands');
-    assert.ok(commandsKind, 'cursor should have a commands kind (#785)');
-
-    const stagedDir = commandsKind.stage(PROFILE_FULL);
-    assert.ok(fs.existsSync(stagedDir), 'stagedDir must exist');
-
-    // Verify all staged files are .md only (no subdirectory SKILL.md layout)
-    const entries = fs.readdirSync(stagedDir, { withFileTypes: true });
-    for (const entry of entries) {
-      assert.ok(entry.isFile(), `${entry.name}: cursor commands dir must contain only flat files`);
-      assert.ok(entry.name.endsWith('.md'), `${entry.name}: must be .md file`);
-    }
+    assert.equal(commandsKind, undefined);
   });
 });
 
@@ -718,6 +748,7 @@ describe('#1477 .gsd-source marker provisioning', () => {
   let savedUserProfile;
   let savedExplicitConfigDir;
   let savedTestMode;
+  let restoreConfigLocationEnv;
 
   function silenceConsole(fn) {
     const orig = { log: console.log, warn: console.warn, error: console.error };
@@ -763,6 +794,12 @@ describe('#1477 .gsd-source marker provisioning', () => {
     delete process.env.GSD_EXPLICIT_CONFIG_DIR;
     savedTestMode = process.env.GSD_TEST_MODE;
     process.env.GSD_TEST_MODE = '1';
+    // #2665: this block calls install(true, 'claude') IN-PROCESS. Redirecting
+    // HOME/USERPROFILE is not enough, because getGlobalConfigDir is env-FIRST:
+    // an ambient CLAUDE_CONFIG_DIR wins over the fixture and a full global
+    // install lands in the developer's live config dir. Found by the post-suite
+    // hermeticity guard (scripts/live-config-guard.cjs), not by inspection.
+    restoreConfigLocationEnv = scrubConfigLocationEnv();
   });
 
   afterEach(() => {
@@ -774,6 +811,7 @@ describe('#1477 .gsd-source marker provisioning', () => {
     else process.env.GSD_EXPLICIT_CONFIG_DIR = savedExplicitConfigDir;
     if (savedTestMode === undefined) delete process.env.GSD_TEST_MODE;
     else process.env.GSD_TEST_MODE = savedTestMode;
+    restoreConfigLocationEnv();
     cleanup(tmpRoot);
   });
 
@@ -969,6 +1007,7 @@ describe('#2624 .gsd-source marker is rewritten before staging reads it', () => 
   let savedUserProfile;
   let savedExplicitConfigDir;
   let savedTestMode;
+  let restoreConfigLocationEnv;
 
   // Run install() with process.exit and console output mocked via t.mock (auto-restored),
   // per CONTRIBUTING.md test rules (no manual monkeypatch / try-finally in test bodies).
@@ -993,6 +1032,13 @@ describe('#2624 .gsd-source marker is rewritten before staging reads it', () => 
     delete process.env.GSD_EXPLICIT_CONFIG_DIR;
     savedTestMode = process.env.GSD_TEST_MODE;
     process.env.GSD_TEST_MODE = '1';
+    // #2665: same in-process hazard as the block above. This one calls
+    // install(true, 'claude') via runInstall(), and HOME/USERPROFILE alone do
+    // not contain it — getGlobalConfigDir is env-FIRST, so an ambient
+    // CLAUDE_CONFIG_DIR beats the fixture, the install lands in the developer's
+    // live config dir, and these tests then fail looking for a marker under
+    // tmpRoot that was never written there.
+    restoreConfigLocationEnv = scrubConfigLocationEnv();
   });
 
   afterEach(() => {
@@ -1004,6 +1050,7 @@ describe('#2624 .gsd-source marker is rewritten before staging reads it', () => 
     else process.env.GSD_EXPLICIT_CONFIG_DIR = savedExplicitConfigDir;
     if (savedTestMode === undefined) delete process.env.GSD_TEST_MODE;
     else process.env.GSD_TEST_MODE = savedTestMode;
+    restoreConfigLocationEnv();
     cleanup(tmpRoot);
   });
 

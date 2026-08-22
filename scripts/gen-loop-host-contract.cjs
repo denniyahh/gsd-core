@@ -20,6 +20,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
+const { escapeRegex: escapeRegExp } = require('../gsd-core/bin/lib/pattern.cjs');
+const { normalizeEol } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const WORKFLOWS_DIR = path.join(ROOT, 'gsd-core', 'workflows');
@@ -191,13 +193,6 @@ function parseLoopHostBlock(content, fileName) {
  * @param {string}   fileName    For error messages
  * @returns {string[]}           Array of error strings; empty = OK
  */
-/**
- * Escape a string for literal use in a RegExp.
- */
-function escapeRegExp(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 function crossCheckRoles(content, agentRoles, fileName) {
   const errors = [];
   for (const role of agentRoles) {
@@ -375,21 +370,6 @@ function serializeContract(contract) {
   return lines.join('\n');
 }
 
-// ─── --check diff helper ──────────────────────────────────────────────────────
-
-/**
- * Normalize line endings to LF for CRLF-agnostic comparison.
- * FIX 4: The serializer has no nondeterministic content (no timestamp), so
- * the generated-by-line stripping that was here has been removed — full content
- * comparison is now used so header drift is caught by --check.
- *
- * @param {string} content
- * @returns {string}
- */
-function normalizeLineEndings(content) {
-  return content.replace(/\r/g, '');
-}
-
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 function main() {
@@ -415,7 +395,7 @@ function main() {
 
     const committed = fs.readFileSync(CONTRACT_PATH, 'utf8');
     // FIX 4: Compare full content (no generated-by stripping) so header drift is caught.
-    if (normalizeLineEndings(committed) !== normalizeLineEndings(live)) {
+    if (normalizeEol(committed) !== normalizeEol(live)) {
       process.stderr.write(
         'gsd-core/bin/lib/loop-host-contract.cjs is stale. Run:\n' +
         '  node scripts/gen-loop-host-contract.cjs --write\n',
@@ -466,12 +446,141 @@ const HOST_LOOP_FILES = STEP_WORKFLOWS.map((w) => 'gsd-core/workflows/' + w.file
  * @param {string} text  Content of a workflow file (or any text).
  * @returns {Set<string>}
  */
+/** The call-site shape both scanners key on — one regex, two consumers (#3606). */
+const CALL_SITE_RE = /loop render-hooks\s+([a-z:]+)/g;
+
 function scanWiredPoints(text) {
-  const re = /loop render-hooks\s+([a-z:]+)/g;
+  const re = CALL_SITE_RE;
   const result = new Set();
   let m;
   while ((m = re.exec(text)) !== null) {
     result.add(m[1]);
+  }
+  return result;
+}
+
+// ─── Hook-kind coverage (#3606) ──────────────────────────────────────────────
+
+const HOOK_KINDS = ['contribution', 'step', 'gate'];
+
+/**
+ * The kinds one call site's dispatch text actually covers (#3606).
+ *
+ * A point having a `loop render-hooks <point>` call site proves the hooks are
+ * RENDERED, not that they are DISPATCHED — a consumer that iterates only
+ * `kind == "gate"` (or narrows `kind == "step"` to one `ref.skill`) silently
+ * drops every other registered kind. Coverage rules for the text following a
+ * call site, up to the next call site or the region cap, judged LINE by line:
+ *
+ * - A deferral line (one carrying an `@`-included path to the generic
+ *   contract, e.g. `@gsd-core/references/loop-hook-dispatch.md`) that names a
+ *   kind (`kind == "step"`) covers that kind; a deferral line with no kind
+ *   discriminator ("apply each entry") covers every kind. A bare §-citation
+ *   of the reference (validation guidance only, no `@`) covers nothing —
+ *   plan-phase cites the gate-validation section while dispatching only gates.
+ * - Otherwise a kind is covered when some LINE dispatches it unconditionally:
+ *   a `kind == "<kind>"` discriminator with NO same-line narrowing to one
+ *   hook (`ref.skill ==`, `ref.agent ==`, `ref.command ==`). A narrowed line
+ *   special-cases ONE hook and proves nothing about the kind generally — the
+ *   exact hand-rolled-consumer shape the reference warns about.
+ *
+ * Quote style and spacing vary across the corpus (`kind == "step"`,
+ * `kind === 'gate'`), so the matcher is tolerant of both quote characters and
+ * of `==`/`===`.
+ *
+ * Pure: same input, same output; CRLF-safe (line splitting tolerates \r).
+ *
+ * @param {string} region  Dispatch text following one call site.
+ * @returns {Set<string>}
+ */
+function coveredKindsInRegion(region) {
+  const covered = new Set();
+  // Same-SEGMENT narrowing to ONE hook voids credit: `ref.skill ==`, `capId ==`,
+  // and `into ==` each special-case a subset, not the kind generally
+  // (plan-phase's `kind == "contribution" and capId == "security"` is the
+  // hand-rolled shape; `into == "planner"` covers only planner-targeted
+  // contributions). Segments, not lines: execute-phase legitimately writes
+  // "dispatch `kind == "step"` hooks per … . `ref.skill == "code-review"`:" —
+  // the deferral is one sentence, the specialization the next; narrowing in a
+  // DIFFERENT segment must not void the deferral's credit.
+  const narrowingRe = /(?:ref\.(?:skill|agent|command)|capId|into)\s*={2,3}/;
+  // Negated mentions describe an absence, not a dispatch ("Branch 1 — no active
+  // step hooks (`activeHooks` has no entry with `kind == "step"`)" — ship.md).
+  const negationRe = /\b(?:no|without|absent|lacks?|missing)\b[^.|]*kind\s*={2,3}/;
+  const deferralRe = /@\S*loop-hook-dispatch\.md/;
+  for (const line of region.split(/\r?\n/)) {
+    // Sentence segments: a `.`/`;` followed by whitespace ends a segment. A
+    // period NOT followed by whitespace (the `.md` inside a deferral path,
+    // `ref.skill`) is not a boundary.
+    for (const segment of line.split(/(?<=[.;])\s+/)) {
+      const kindDiscriminators = [];
+      for (const kind of HOOK_KINDS) {
+        if (new RegExp(`kind\\s*={2,3}\\s*["']${kind}["']`).test(segment)) kindDiscriminators.push(kind);
+      }
+      if (kindDiscriminators.length === 0) {
+        // A deferral with no kind discriminator ("apply each entry per …")
+        // still covers every kind.
+        if (deferralRe.test(segment)) for (const kind of HOOK_KINDS) covered.add(kind);
+        continue;
+      }
+      if (negationRe.test(segment)) continue;
+      if (deferralRe.test(segment)) {
+        // Deferral naming kinds ("dispatch `kind == "step"` hooks per …").
+        if (!narrowingRe.test(segment)) for (const kind of kindDiscriminators) covered.add(kind);
+        continue;
+      }
+      if (!narrowingRe.test(segment)) for (const kind of kindDiscriminators) covered.add(kind);
+    }
+  }
+  return covered;
+}
+
+/**
+ * Scan every `loop render-hooks <point>` call site in `text` and accumulate,
+ * per point, the union of hook kinds its dispatch regions cover (#3606).
+ *
+ * @param {string} text  Content of a workflow file (or any text).
+ * @returns {Map<string, Set<string>>}  point → covered kinds.
+ */
+function scanWiredKinds(text) {
+  const result = new Map();
+  const siteRe = CALL_SITE_RE;
+  const sites = [];
+  let m;
+  while ((m = siteRe.exec(text)) !== null) sites.push({ point: m[1], start: m.index });
+  const REGION_CAP = 6000;
+  for (let i = 0; i < sites.length; i++) {
+    const regionEnd = i + 1 < sites.length ? sites[i + 1].start : Math.min(text.length, sites[i].start + REGION_CAP);
+    const region = text.slice(sites[i].start, regionEnd);
+    const covered = coveredKindsInRegion(region);
+    if (!result.has(sites[i].point)) result.set(sites[i].point, new Set());
+    for (const kind of covered) result.get(sites[i].point).add(kind);
+  }
+  return result;
+}
+
+/**
+ * Read every host-loop workflow file and return, per point, the union of hook
+ * kinds its call sites' dispatch text covers (#3606).
+ *
+ * @param {string} [repoRoot]  Path to the repository root. Defaults to ROOT.
+ * @returns {Map<string, Set<string>>}
+ */
+function getWiredKinds(repoRoot) {
+  const resolvedRoot = repoRoot !== undefined ? repoRoot : ROOT;
+  const result = new Map();
+  for (const relPath of HOST_LOOP_FILES) {
+    const absPath = path.join(resolvedRoot, relPath);
+    let content;
+    try {
+      content = fs.readFileSync(absPath, 'utf8');
+    } catch (err) {
+      throw new Error('getWiredKinds: cannot read host-loop file ' + absPath + ': ' + err.message);
+    }
+    for (const [point, kinds] of scanWiredKinds(content)) {
+      if (!result.has(point)) result.set(point, new Set());
+      for (const kind of kinds) result.get(point).add(kind);
+    }
   }
   return result;
 }
@@ -509,7 +618,7 @@ module.exports = {
   assertPointsCoverage,
   buildContract,
   serializeContract,
-  normalizeLineEndings,
+  normalizeLineEndings: normalizeEol,
   STEP_WORKFLOWS,
   HOST_LOOP_FILES,
   CANONICAL_POINTS,
@@ -517,6 +626,10 @@ module.exports = {
   ROLE_TO_AGENT,
   scanWiredPoints,
   getWiredLoopPoints,
+  coveredKindsInRegion,
+  scanWiredKinds,
+  getWiredKinds,
+  HOOK_KINDS,
 };
 
 // ─── CLI entry point ──────────────────────────────────────────────────────────

@@ -23,18 +23,21 @@ import planScan = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningPaths, planningRoot, getActiveWorkstream } = planningWorkspace;
-import { stateExtractField } from './state-document.cjs';
+import { stateFieldValue } from './state-document.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
+import frontmatterMod = require('./frontmatter.cjs');
+const { extractFrontmatter, stripFrontmatter } = frontmatterMod;
 import { findTableWithColumns } from './markdown-table.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- verification.cjs is an export= CommonJS module
 import verificationMod = require('./verification.cjs');
-const { readVerificationStatus } = verificationMod;
+const { isPhaseComplete } = verificationMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
 import phaseIdMod = require('./phase-id.cjs');
 const { phaseKeyFromDir, phaseKeyFromProse, parentPhaseKey } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- roadmap-parser.cjs is an export= CommonJS module
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const { getMilestonePhaseFilter, isMilestoneShippedInRoadmap } = roadmapParserMod;
-import { buildWorkstreamInventory, isCompletedInventory } from './workstream-inventory-builder.cjs';
+import { buildWorkstreamInventory, isCompletedInventory, pickRollupWinners } from './workstream-inventory-builder.cjs';
 import type { WorkstreamInventory, StateProjection, MilestoneShippedSignal } from './workstream-inventory-builder.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -46,6 +49,22 @@ interface PhaseFileCounts {
 
 interface InspectWorkstreamOptions {
   active?: string | null;
+  /**
+   * #3057 B3: injectable diagnostic-write seam, mirrored from
+   * cmdGitBaseBranch's `writeDiagnostic` (git-base-branch.cts). Called with a
+   * stderr-style line when a phase's readVerificationStatus staleness check
+   * could not run to completion — WorkstreamInventory's own return shape
+   * (`phases: PhaseStatus[]`) has no per-phase verification detail today, so
+   * this side channel surfaces the fact without widening that aggregate type.
+   * The second argument carries the same facts as structured, typed data
+   * (CONTRIBUTING: no raw-text matching on produced diagnostics) so a caller
+   * — tests included — can assert on `phaseDir`/`reason` directly instead of
+   * pattern-matching the operator-facing `message`. The default
+   * implementation writes only `message` to stderr; operator output is
+   * unchanged. Never affects routing: the ledger / rollup computation below
+   * is unchanged either way (the pre-existing fail-open contract).
+   */
+  writeDiagnostic?: (message: string, meta: { phaseDir: string; reason: string }) => void;
 }
 
 interface WorkstreamInventoryList {
@@ -62,11 +81,26 @@ function workstreamsRoot(cwd: string): string {
   return path.join(planningRoot(cwd), 'workstreams');
 }
 
-function countRoadmapPhases(roadmapPath: string, fallbackCount: number): number {
+/**
+ * #3185 (ADR-3180 Decision 1): count the phases the CURRENT milestone
+ * declares, not every `Phase` heading in the file.
+ *
+ * This previously matched `^#{2,4}\s+Phase\s+…` across the whole ROADMAP with
+ * no milestone window and no sentinel filter, so it counted 999.* backlog and
+ * Phase 0 headings and spanned every milestone the document had ever had.
+ * `getMilestonePhaseFilter` already computes exactly this number for the
+ * scoped window (`phaseCount`, sentinel-filtered), and `inspectWorkstream` in
+ * this same file already passes a resolved `currentVersion` to it — this
+ * function was the sibling copy that never got the fix.
+ */
+function countRoadmapPhases(roadmapPath: string, fallbackCount: number, cwd?: string, ws?: string | null, versionOverride?: string | null): number {
   try {
-    const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
-    const matches = roadmapContent.match(/^#{2,4}\s+Phase\s+[\w][\w.-]*/gm);
-    return matches ? matches.length : fallbackCount;
+    if (!fs.existsSync(roadmapPath)) return fallbackCount;
+    if (!cwd) return fallbackCount;
+    const filter = getMilestonePhaseFilter(cwd, versionOverride ?? null, null, ws ?? null);
+    // A pass-all degrade (phaseCount 0) means the window declared no phases —
+    // fall back rather than reporting a confident zero.
+    return filter.phaseCount > 0 ? filter.phaseCount : fallbackCount;
   } catch {
     return fallbackCount;
   }
@@ -199,15 +233,234 @@ function countPhaseFiles(phaseDir: string): PhaseFileCounts {
   return { planCount: scan.planCount, summaryCount: scan.summaryCount };
 }
 
+// ─── #2645: verification-deletion ledger ───────────────────────────────────
+//
+// #2562's completeness gate (`FAILING_VERIFICATION_STATUSES`,
+// workstream-inventory-builder.cts) reads a phase's verification verdict
+// fresh from `*-VERIFICATION.md` on every call. That makes "verifier ran,
+// found gaps, report later deleted" indistinguishable from "verifier never
+// ran" — both collapse to the same `'missing'` sentinel
+// (verification.cts's `missingResult()`), which is deliberately NOT in the
+// failing set (so verifier-disabled projects can still reach 100%). Deleting
+// a failing report is therefore sufficient to silently raise the reported
+// completion percentage — a Goodhart hole (#2645).
+//
+// The fix persists the last REAL (non-'missing') verdict this module has
+// ever observed per phase key, in a small ledger file living at the
+// WORKSTREAM directory level — never inside the phase directory whose file
+// is the thing being deleted, so the same `rm` that triggers the hole
+// cannot also erase the memory of it. When a live read comes back 'missing',
+// the ledger is consulted as a fallback; when a live read comes back with a
+// real verdict — including a later 'passed' that supersedes an earlier
+// failing one — the ledger is updated to match, so a genuinely re-verified
+// phase is never permanently pinned.
+//
+// #2645 review: a NAIVE two-state read ("got entries, or nothing") fails
+// OPEN — any read/parse failure degraded to `{}`, which is indistinguishable
+// from "genuinely never verified", so corrupting the ledger (or deleting it
+// alongside the report) silently reopened the exact hole this fix exists to
+// close, one level up. THREE states, not two:
+//
+//   1. `'absent'`  — no `.verification-ledger.json` for this workstream at
+//      all. This is the ONLY state that behaves exactly as pre-#2645 (a
+//      phase with no live report reads `'missing'`, ungated). Deliberate:
+//      on the day this ships, EVERY existing project is in this state for
+//      EVERY workstream, and gating here would drop them all to
+//      `in_progress` at once. A workstream stays here forever if the
+//      verifier is never actually used on it (criterion 2/3 — no entry is
+//      ever written for a `'missing'` live read, so the file itself is
+//      never created).
+//   2. `'corrupt'` — the file exists but could not be read or parsed (I/O
+//      error, invalid JSON, wrong shape). This is NOT the same as absent:
+//      an unreadable file is evidence something existed. Treated identically
+//      to "present, no entry for this phase" below — fails CLOSED, not open.
+//   3. `'ok'`      — the file exists and parsed. A phase with an entry uses
+//      it; a phase WITHOUT one is "present, no entry" — this workstream has
+//      adopted the ledger (some phase in it has a real verdict on record),
+//      so an unobserved phase can no longer default to the pre-adoption
+//      "ungated" behavior, or the same evidence-erasure hole reopens for
+//      THIS phase specifically. Fails CLOSED: resolves to the `'unrecorded'`
+//      sentinel (`workstream-inventory-builder.cts`'s
+//      `FAILING_VERIFICATION_STATUSES`), not `'missing'`.
+//
+// Corrupt-ledger recovery: a corrupt ledger is NOT a permanent wedge. Any
+// phase with a REAL live verdict on disk still writes/repairs the ledger on
+// this same call (the corrupt content is fully overwritten, never patched),
+// so re-running the verifier for even one phase heals the file. A phase with
+// no live report and no way to re-verify stays `'unrecorded'` (gated) until
+// someone re-verifies it — a deliberate, disclosed cost of failing closed,
+// not an accidental one.
+//
+// Disclosed, ACCEPTED residual gap (not closed by this fix, and not closable
+// by ledger design alone): deleting the ledger FILE ITSELF (not just the
+// phase's report) returns a workstream to state 1 (`'absent'`) and restores
+// pre-#2645 behavior for it. Any durable store that can fail open when
+// absent has this property at its own root — the ledger raises the bar from
+// "delete one file" to "delete two files in two different directories,
+// including one this issue's own reproduction never needed to touch", but a
+// deliberately absent ledger is indistinguishable from a never-adopted one
+// by design (criterion 2/3 depend on that same indistinguishability). Rail B
+// is PROSPECTIVE ONLY: a phase verified and its report deleted BEFORE this
+// fix ships has no ledger entry to fall back on and cannot be retroactively
+// recovered.
+interface VerificationLedger { [phaseKey: string]: string; }
+
+interface VerificationLedgerRead {
+  state: 'absent' | 'corrupt' | 'ok';
+  entries: VerificationLedger;
+}
+
+function verificationLedgerPath(wsDir: string): string {
+  return path.join(wsDir, '.verification-ledger.json');
+}
+
+function readVerificationLedger(wsDir: string): VerificationLedgerRead {
+  const ledgerPath = verificationLedgerPath(wsDir);
+  let raw: string;
+  try {
+    raw = fs.readFileSync(ledgerPath, 'utf-8');
+  } catch (err) {
+    // `fs.readFileSync` FOLLOWS symlinks, so a broken symlink at this path
+    // (the entry exists, its target does not) reports the EXACT SAME
+    // `ENOENT` as genuine absence — `code` alone cannot distinguish
+    // "nothing was ever here" from "something is here and cannot be read".
+    // `fs.lstatSync` does NOT follow symlinks, so it still finds the
+    // symlink entry itself even when its target is gone. Only when NEITHER
+    // call finds anything is this genuinely `'absent'` (pre-adoption); a
+    // present-but-broken symlink is evidence something existed and must
+    // fail CLOSED like any other unreadable ledger, not fall open.
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === 'ENOENT') {
+      try {
+        fs.lstatSync(ledgerPath);
+        return { state: 'corrupt', entries: {} }; // a symlink entry exists; its target does not
+      } catch (lstatErr) {
+        // #2645 review: every OTHER failure path in this function fails
+        // CLOSED — this one must too. A failed `lstatSync` is only proof of
+        // absence when IT ALSO reports `ENOENT`; anything else (a raced
+        // permission change, a path component that became inaccessible
+        // between the two calls, …) is not evidence the file was never
+        // there, and a bare `catch {}` here would silently fall OPEN exactly
+        // like the two-state design this fix replaced.
+        const lstatCode = (lstatErr as NodeJS.ErrnoException)?.code;
+        if (lstatCode === 'ENOENT') return { state: 'absent', entries: {} }; // truly nothing at this path
+        return { state: 'corrupt', entries: {} };
+      }
+    }
+    // Any OTHER read failure (EACCES, EISDIR, …) also means the path EXISTS
+    // in some form but this process cannot see its content right now — that
+    // is corruption from this reader's point of view, not absence, and must
+    // fail closed rather than silently falling back to the ungated
+    // pre-adoption behavior.
+    return { state: 'corrupt', entries: {} };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { state: 'corrupt', entries: {} };
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { state: 'corrupt', entries: {} };
+  }
+  const out: VerificationLedger = {};
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (typeof value === 'string') out[key] = value;
+  }
+  return { state: 'ok', entries: out };
+}
+
+// #2645 review: Windows can transiently hold the rename target busy (AV
+// scanners, indexers) — the SAME retry shape `broken-windows.cts`'s
+// `writeLedgerAtomic`/`renameWithRetry` already uses for its own ledger
+// write, mirrored here rather than imported (that function is private to
+// its module) so this fix does not widen its own blast radius by exporting
+// a new cross-module utility.
+const LEDGER_RENAME_RETRY_ERRNOS = new Set(['EPERM', 'EBUSY', 'EACCES']);
+const LEDGER_RENAME_MAX_ATTEMPTS = 5;
+const LEDGER_RENAME_BACKOFF_MS = 25;
+
+function renameVerificationLedgerWithRetry(tmpPath: string, finalPath: string): void {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < LEDGER_RENAME_MAX_ATTEMPTS; attempt++) {
+    try {
+      fs.renameSync(tmpPath, finalPath);
+      return;
+    } catch (err: unknown) {
+      lastErr = err;
+      const code = (err && typeof err === 'object' && 'code' in err) ? String((err as { code?: unknown }).code) : '';
+      if (code && LEDGER_RENAME_RETRY_ERRNOS.has(code) && attempt < LEDGER_RENAME_MAX_ATTEMPTS - 1) {
+        // Exponential-ish backoff: 25ms, 50ms, 100ms, 200ms. Transient
+        // Windows locks usually clear well inside that window.
+        const delay = LEDGER_RENAME_BACKOFF_MS * Math.pow(2, attempt);
+        const start = Date.now();
+        while (Date.now() - start < delay) {
+          // Deliberate short busy-wait — no async/timer seam is available
+          // in this synchronous read path.
+        }
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
+function writeVerificationLedger(wsDir: string, ledger: VerificationLedger): void {
+  // #2645 review: atomic write. A crash or a concurrent read mid-write
+  // against `verificationLedgerPath(wsDir)` directly would leave (or briefly
+  // expose) TRUNCATED JSON — and now that `'corrupt'` carries real semantic
+  // weight (it fails CLOSED, holding every phase with no live report at
+  // `'unrecorded'`), producing a corrupt file ourselves is a self-inflicted
+  // version of the exact failure mode this fix exists to survive. Write to a
+  // sibling temp file in the SAME directory (same filesystem — `rename` is
+  // only atomic within one) and rename into place: a reader can only ever
+  // observe the prior complete content or the new complete content.
+  const finalPath = verificationLedgerPath(wsDir);
+  const tmpPath = `${finalPath}.${process.pid}.tmp`;
+  try {
+    fs.mkdirSync(wsDir, { recursive: true });
+    fs.writeFileSync(tmpPath, `${JSON.stringify(ledger, null, 2)}\n`, 'utf-8');
+    renameVerificationLedgerWithRetry(tmpPath, finalPath);
+  } catch {
+    // Best-effort persistence: a missing parent directory that `mkdirSync`
+    // itself cannot create, a read-only filesystem, a write failure, or a
+    // rename failure that exhausts its retries must not break inventory
+    // reads, which are otherwise pure. Losing this observation only
+    // re-opens the pre-#2645 window for THIS run; the next successful read
+    // while a report is on disk repairs it. Clean up a half-written temp
+    // file so repeated failures cannot accumulate orphaned
+    // `.verification-ledger.json.<pid>.tmp` files.
+    try { fs.unlinkSync(tmpPath); } catch { /* nothing to clean up, or cleanup itself failed — not fatal */ }
+  }
+}
+
 function readStateProjection(statePath: string): StateProjection {
   try {
     const stateContent = fs.readFileSync(statePath, 'utf-8');
+    // #3187: route Status/Current Phase/Last Activity through the single
+    // #1760 fallback-chain owner (state-document.cjs's stateFieldValue)
+    // instead of a frontmatter-blind stateExtractField(stateContent, …) call,
+    // mirroring cmdStateValidate/cmdStateSnapshot — a STATE.md whose fields
+    // live only in frontmatter is no longer projected as absent here.
+    const fm = extractFrontmatter(stateContent, statePath) as Record<string, unknown>;
+    const body = stripFrontmatter(stateContent);
     return {
-      status: stateExtractField(stateContent, 'Status') || 'unknown',
-      current_phase: stateExtractField(stateContent, 'Current Phase'),
-      last_activity: stateExtractField(stateContent, 'Last Activity'),
+      status: stateFieldValue(fm, body, 'status', 'Status').value || 'unknown',
+      current_phase: stateFieldValue(fm, body, 'current_phase', 'Current Phase').value,
+      last_activity: stateFieldValue(fm, body, 'last_activity', 'Last Activity').value,
     };
   } catch {
+    // Read/parse failure (missing file, permission fault, etc.) degrades to
+    // an all-unknown projection — unchanged. Not widened to also carry a
+    // `scope` here: doing so would ripple `StateProjection`
+    // (workstream-inventory-builder.cjs) and every consumer of this
+    // read-only rollup — the design doc's blast-radius table rates
+    // `readStateProjection` "low"/Tier-2, and this call site's migration is
+    // scoped to routing the fallback chain, not to widening the return type.
+    // The existing all-unknown degrade already distinguishes "could not
+    // read" from any real field value; only its scope-vs-absence *reason*
+    // stays uncaptured, same as before this change.
     return {
       status: 'unknown',
       current_phase: null,
@@ -268,6 +521,7 @@ function inspectWorkstream(cwd: string, name: string, options: InspectWorkstream
   if (!fs.existsSync(wsDir)) return null;
 
   const activeWorkstreamName = options.active === undefined ? getActiveWorkstream(cwd) : options.active;
+  const writeDiagnostic = options.writeDiagnostic ?? ((message: string) => process.stderr.write(message));
   const p = planningPaths(cwd, name);
   const phaseDirNames = readSubdirectories(p.phases);
 
@@ -366,9 +620,43 @@ function inspectWorkstream(cwd: string, name: string, options: InspectWorkstream
   // Collect per-phase file counts (+ canonical key, milestone membership,
   // verification verdict). `phaseKey` lets the builder de-duplicate stale
   // same-numbered directories (Bug #2445's scenario) in the rollup.
-  const phaseFilesCounts = phaseDirNames.map(dir => {
+  //
+  // #2645 review: built from `[...phaseDirNames].sort()`, NOT the raw
+  // `phaseDirNames` (unsorted `readdirSync` order — `readSubdirectories`'s
+  // default). `buildWorkstreamInventory`'s own de-dup (`rollupDirByKey`,
+  // workstream-inventory-builder.cts) iterates the SAME sorted order; the
+  // ledger-winner tie-break below (incumbent wins unless a later entry has a
+  // STRICTLY newer mtime) only agrees with the builder's winner on an exact
+  // mtime tie if both walk entries in the same order. Iterating unsorted
+  // input here let the two independently pick different "winning"
+  // directories for one phase key on a tie — reopening the stale-duplicate-
+  // clobbers-live-verdict hole criterion 4 exists to close.
+  const rawPhaseEntries = [...phaseDirNames].sort().map(dir => {
     const phaseDir = path.join(p.phases, dir);
     const counts = countPhaseFiles(phaseDir);
+    // ADR-3180 §7.4 (#3186): routed through the single canonical owner
+    // (`isPhaseComplete`, src/verification.cts) instead of calling
+    // `readVerificationStatus` directly and re-deriving "is this phase
+    // complete" locally from its `.status`. `completionResult.value.complete`
+    // is threaded down to the builder below (as `PhaseFilesCount.complete`)
+    // so `buildWorkstreamInventory` — a pure, I/O-free projection that
+    // cannot call the owner itself — consumes the owner's verdict rather
+    // than re-deriving a second one from summary/plan counts.
+    const completionResult = isPhaseComplete(phaseDir);
+    const verificationResult = completionResult.value.verification;
+    // #3057 B3: routing is UNCHANGED — `liveVerificationStatus` below is still
+    // `.status`, exactly as before, so the ledger/rollup logic that consumes
+    // it is unaffected. This only makes an indeterminate staleness check
+    // visible (stderr), matching cmdGitBaseBranch's own non-blocking
+    // unverified-fallback diagnostic (#3057 B4) — the closest existing idiom,
+    // since `WorkstreamInventory`'s aggregate return shape carries no
+    // per-phase verification detail for this to attach to.
+    if (verificationResult.staleCheckIndeterminate) {
+      writeDiagnostic(
+        `⚠ workstream-inventory: verification staleness check could not complete for phase directory '${dir}' in workstream '${name}' — routed as not-stale, but this was not actually verified. See #3057.\n`,
+        { phaseDir: dir, reason: 'staleCheckIndeterminate' },
+      );
+    }
     return {
       directory: dir,
       phaseKey: phaseKeyFromDir(dir),
@@ -376,7 +664,90 @@ function inspectWorkstream(cwd: string, name: string, options: InspectWorkstream
       planCount: counts.planCount,
       summaryCount: counts.summaryCount,
       inMilestone: isDirInCurrentMilestone(dir),
-      verificationStatus: readVerificationStatus(phaseDir).status,
+      liveVerificationStatus: verificationResult.status,
+      // ADR-3180 §7.4 (#3186): the owner's verdict, read live off disk — never
+      // ledger-adjusted (see the phaseFilesCounts map below; the ledger only
+      // ever substitutes a 'missing' status with a remembered one, and under
+      // disk-strict neither 'missing' nor 'unrecorded' is ever complete, so
+      // there is nothing for the ledger to override here).
+      complete: completionResult.value.complete,
+    };
+  });
+
+  // #2645: only the directory Bug #2445's de-dup rollup would actually pick
+  // for a phase key may read or write that key's ledger entry. Letting every
+  // same-keyed directory (including a stale leftover) write would let a
+  // stale duplicate's stale verdict clobber the live directory's remembered
+  // one.
+  //
+  // #2645 review — CORRECTED: an earlier version of this comment claimed the
+  // milestone-scoping exclusion (`scoped && entry.inMilestone === false`)
+  // was safe to drop here as "out of scope", and hand-wrote a scoping-free
+  // tie-break rule. That was a real bug, not a scope call: in a SCOPED
+  // workstream, a stale OUT-of-milestone directory sharing a phase key with
+  // the live IN-milestone one can have a newer mtime (plausible after a
+  // checkout/rebase resets mtimes) and would then win THIS selection while
+  // the builder's own `rollupDirByKey` — which DOES apply the scoping filter
+  // — picks the live directory instead. `isLedgerWinner` would then be false
+  // for the live directory, so deleting ITS `*-VERIFICATION.md` would never
+  // consult the ledger and would reopen #2645's exact hole for the phase
+  // that actually counts toward `completed_phases` — reachable with a plain
+  // `rm`, no ledger tampering required. Fixed by calling the SAME shared
+  // `pickRollupWinners` the builder's `rollupDirByKey` now also calls, with
+  // the identical scoping filter, rather than a second hand-written copy.
+  const ledgerWinnerByKey = pickRollupWinners(
+    rawPhaseEntries,
+    (entry) => entry.phaseKey,
+    (entry) => entry.mtimeMs,
+    (entry) => !(scoped && entry.inMilestone === false),
+  );
+
+  const ledgerRead = readVerificationLedger(wsDir);
+  // Both `'corrupt'` and `'ok'` start from whatever entries could actually be
+  // trusted (empty for `'corrupt'` — nothing in an unparseable file is
+  // trusted) and get REPAIRED below by any real verdict this call observes;
+  // only `'absent'` skips the ledger mechanism entirely (pre-adoption).
+  const verificationLedger = ledgerRead.entries;
+  let ledgerDirty = false;
+  for (const winner of ledgerWinnerByKey.values()) {
+    if (winner.liveVerificationStatus === 'missing') continue;
+    if (verificationLedger[winner.phaseKey] !== winner.liveVerificationStatus) {
+      verificationLedger[winner.phaseKey] = winner.liveVerificationStatus;
+      ledgerDirty = true;
+    }
+  }
+  // A `'corrupt'` read that observes no real verdict this call has nothing to
+  // repair with — writing an empty `{}` would DESTROY whatever the corrupt
+  // file's bytes might still hold (a human could recover it by hand; this
+  // fix must not foreclose that). Only write when there is something real to
+  // persist, exactly as for `'absent'`/`'ok'`.
+  if (ledgerDirty) writeVerificationLedger(wsDir, verificationLedger);
+
+  const phaseFilesCounts = rawPhaseEntries.map(entry => {
+    const isLedgerWinner = ledgerWinnerByKey.get(entry.phaseKey) === entry;
+    let verificationStatus = entry.liveVerificationStatus;
+    if (entry.liveVerificationStatus === 'missing' && isLedgerWinner) {
+      if (ledgerRead.state === 'absent') {
+        // State 1: pre-adoption. Exactly today's behavior — 'missing' is
+        // NOT in FAILING_VERIFICATION_STATUSES, so this does not gate.
+        verificationStatus = 'missing';
+      } else {
+        // States 2/3 ('corrupt' or 'ok'): this workstream has adopted the
+        // ledger. A remembered entry wins; no entry fails CLOSED to the
+        // 'unrecorded' sentinel rather than falling open to 'missing'.
+        const remembered = verificationLedger[entry.phaseKey];
+        verificationStatus = remembered !== undefined ? remembered : 'unrecorded';
+      }
+    }
+    return {
+      directory: entry.directory,
+      phaseKey: entry.phaseKey,
+      mtimeMs: entry.mtimeMs,
+      planCount: entry.planCount,
+      summaryCount: entry.summaryCount,
+      inMilestone: entry.inMilestone,
+      verificationStatus,
+      complete: entry.complete,
     };
   });
 
@@ -397,7 +768,7 @@ function inspectWorkstream(cwd: string, name: string, options: InspectWorkstream
   // declares in its Progress table but never scaffolded — the heading-only
   // count drops them, even when other headings exist. Union the declared rows
   // with the phase directories so neither source can silently shrink it.
-  let fallbackPhaseCount = countRoadmapPhases(p.roadmap, phaseDirNames.length);
+  let fallbackPhaseCount = countRoadmapPhases(p.roadmap, phaseDirNames.length, cwd, name, currentVersion);
   if (!scoped && progressRows.length > 0) {
     const union = new Set(progressRows.map(row => row.key));
     for (const entry of phaseFilesCounts) union.add(entry.phaseKey);

@@ -12,10 +12,12 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync } = require('node:child_process');
+const { runNode } = require('./helpers/process-seam.cjs');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 const { installerEnv } = require('./helpers/install-shared.cjs');
 
+// #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
+const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const AGENTS_DIR_NAME = 'agents';
 const MODEL_PROFILES = require('../gsd-core/bin/lib/model-profiles.cjs').MODEL_PROFILES;
 const EXPECTED_AGENTS = Object.keys(MODEL_PROFILES);
@@ -131,6 +133,57 @@ describe('init commands: agents_installed field (#1371)', () => {
     assert.strictEqual(output.agents_dir, localAgentsDir);
     assert.strictEqual(output.agents_installed, true);
     assert.deepStrictEqual(output.missing_agents, []);
+  });
+
+  test('init reports codex when the session signal is present', () => {
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-setup');
+    fs.mkdirSync(phaseDir, { recursive: true });
+
+    const result = runGsdTools('init plan-phase 1 --raw', tmpDir, { CODEX_SANDBOX: 'seatbelt' });
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.agent_runtime, 'codex');
+  });
+
+  test('init honors explicit config runtime over detection', () => {
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-setup');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ runtime: 'claude' }),
+    );
+
+    const result = runGsdTools('init plan-phase 1 --raw', tmpDir, { CODEX_SANDBOX: 'seatbelt' });
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.agent_runtime, 'claude');
+  });
+
+  test('init is unaffected in a non-codex session', () => {
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-setup');
+    fs.mkdirSync(phaseDir, { recursive: true });
+
+    const result = runGsdTools('init plan-phase 1 --raw', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.agent_runtime, 'claude');
+  });
+
+  test('init honors GSD_RUNTIME over detection', () => {
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-setup');
+    fs.mkdirSync(phaseDir, { recursive: true });
+
+    const result = runGsdTools('init plan-phase 1 --raw', tmpDir, {
+      GSD_RUNTIME: 'opencode',
+      CODEX_SANDBOX: 'seatbelt',
+    });
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.agent_runtime, 'opencode');
   });
 
   test('init execute-phase includes missing_agents list when agents are missing', () => {
@@ -397,17 +450,16 @@ describe('checkAgentsInstalled: Kimi agents/subagents layout', () => {
     });
 
     try {
-      const installResult = spawnSync(
-        process.execPath,
+      const installResult = runNode(
         [INSTALL_SCRIPT, '--kimi', '--global', '--config-dir', tmpConfig, '--no-sdk'],
         {
           cwd: tmpDir,
-          encoding: 'utf8',
           env,
+          timeoutMs: INSTALL_TIMEOUT_MS,
         },
       );
       assert.strictEqual(
-        installResult.status,
+        installResult.exitCode,
         0,
         `Kimi install failed\nstdout: ${installResult.stdout}\nstderr: ${installResult.stderr}`,
       );

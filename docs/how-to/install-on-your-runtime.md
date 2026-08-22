@@ -36,6 +36,8 @@ npx @opengsd/gsd-core@latest --claude --global
 
 Skills land in `~/.claude/`. Commands appear as `/gsd-*` slash commands in your next Claude Code session. Restart Claude Code to pick them up.
 
+**Installing at both `--global` and `--local`.** This is a supported configuration (different projects sometimes need different customizations), but Claude Code's own trigger-resolution rules — personal scope overrides project scope, and a skill overrides a same-named command — both point the same direction: the global skill always wins the `/gsd-<name>` trigger over the local command. GSD Core detects this and prints which scope is winning right after install completes (and surfaces the identical fact from `/gsd-health` as diagnostic `W028`); it is an advisory, not a failure — the install itself still succeeds. At **global** scope, the winning skill's workflow-spec reference resolves at runtime against your working directory first, so a project with its own `.claude/gsd-core/` still gets its own specs even though the global skill is what Claude Code invokes — see [Interpret install-shadow warnings](interpret-install-shadow-warnings.md) for what the warning means, how to read which scope wins, and the limits of that resolution (it does not extend to the skill's `references/`/`templates/` includes).
+
 **Override the install directory:**
 
 ```bash
@@ -50,7 +52,7 @@ GSD registers the following Claude Code hook events automatically on install:
 |---|---|---|
 | `SessionStart` | `gsd-check-update.js`, `gsd-session-state.sh` | Update check, session orientation |
 | `PostToolUse` | `gsd-context-monitor.js`, `gsd-read-injection-scanner.js`, `gsd-phase-boundary.sh`, `gsd-graphify-update.sh` | Context monitoring, read-time scan, phase boundary detection |
-| `PreToolUse` | `gsd-prompt-guard.js`, `gsd-read-guard.js`, `gsd-workflow-guard.js`, `gsd-worktree-path-guard.js`, `gsd-validate-commit.sh` | Prompt guard, read-before-edit, workflow + worktree safety, commit validation |
+| `PreToolUse` | `gsd-prompt-guard.js`, `gsd-read-guard.js`, `gsd-workflow-guard.js`, `gsd-worktree-path-guard.js`, `gsd-agent-isolation-guard.js`, `gsd-validate-commit.sh` | Prompt guard, read-before-edit, workflow + worktree safety, agent-dispatch isolation, commit validation |
 | `SubagentStop` | `gsd-context-monitor.js` | Context headroom tracking after subagent completion |
 | `Stop` | `gsd-context-monitor.js` | Context headroom tracking before model stop |
 | `PreCompact` | `gsd-context-monitor.js` | Context awareness before conversation compaction |
@@ -213,7 +215,15 @@ If your machine already uses `~/.agents/skills` and does not have `~/.config/age
 kimi --agent-file ~/.agents/agents/gsd.yaml
 ```
 
-Kimi also discovers user skills from the brand-specific `~/.kimi-code` directory. If your Kimi setup is already centered on `~/.kimi-code`, install there explicitly:
+> **If you are on Kimi Code, use `--kimi-code`, not `--kimi` with a redirected config dir.** Since 1.10.0 (#2755) Kimi Code is its own runtime with its own hooks root:
+>
+> ```bash
+> npx @opengsd/gsd-core@latest --kimi-code --global
+> ```
+>
+> `--config-dir` and `KIMI_CONFIG_DIR` select the *skills* root only. They do **not** move the native `config.toml` that carries GSD's `[[hooks]]` block — that root is chosen by the runtime (`~/.kimi` for `--kimi` via `KIMI_SHARE_DIR`, `~/.kimi-code` for `--kimi-code` via `KIMI_CODE_HOME`). Running `--kimi --config-dir ~/.kimi-code` therefore puts your skills under `~/.kimi-code` while the hooks still land in `~/.kimi` — the exact split that left orphaned hooks behind before 1.10.0. See [Migrating from `--kimi` to `--kimi-code`](../migration/kimi-to-kimi-code.md), which also covers reclaiming artifacts an older install already wrote.
+
+Kimi CLI also discovers user skills from the brand-specific `~/.kimi-code` directory. If you are genuinely on **Kimi CLI** and your setup is centered on `~/.kimi-code`, redirect its skills root explicitly:
 
 ```bash
 npx @opengsd/gsd-core@latest --kimi --global --config-dir ~/.kimi-code
@@ -282,7 +292,7 @@ COPILOT_CONFIG_DIR=~/.copilot-alt npx @opengsd/gsd-core@latest --copilot --globa
 npx @opengsd/gsd-core@latest --cursor --global
 ```
 
-Artifacts land in `~/.cursor/`. GSD installs slash commands (`~/.cursor/commands/gsd-*.md`), skills (`~/.cursor/skills/gsd-*/SKILL.md`), agents, and rule references. Each GSD action appears once in Cursor's `/` menu: the command surface is the single `/` entry point, and the skills are installed with `user-invocable: false` so they stay model-invocable background knowledge without duplicating the `/` entries.
+Artifacts land in `~/.cursor/`. GSD installs skills (`~/.cursor/skills/gsd-*/SKILL.md`), agents, and rule references. Cursor exposes each skill once in the `/` menu while keeping it available for contextual model invocation. Upgrading removes manifest-managed legacy `~/.cursor/commands/gsd-*.md` copies that previously duplicated those menu entries; unknown user-authored command files are preserved.
 
 **Override the install directory:**
 
@@ -366,7 +376,7 @@ GSD registers the following events automatically on install (Claude hook event d
 | Event | Hook | Purpose |
 |---|---|---|
 | `SessionStart` | `gsd-check-update.js`, `gsd-session-state.sh` | Update check, session orientation |
-| `PreToolUse` | `gsd-prompt-guard.js`, `gsd-read-guard.js`, `gsd-workflow-guard.js`, `gsd-worktree-path-guard.js`, `gsd-validate-commit.sh` | Prompt guard, read-before-edit, workflow + worktree safety, commit validation |
+| `PreToolUse` | `gsd-prompt-guard.js`, `gsd-read-guard.js`, `gsd-workflow-guard.js`, `gsd-worktree-path-guard.js`, `gsd-agent-isolation-guard.js`, `gsd-validate-commit.sh` | Prompt guard, read-before-edit, workflow + worktree safety, agent-dispatch isolation, commit validation |
 | `PostToolUse` | `gsd-context-monitor.js`, `gsd-read-injection-scanner.js`, `gsd-phase-boundary.sh`, `gsd-graphify-update.sh` | Context monitoring, read-time scan, phase boundary detection |
 | `SubagentStop` | `gsd-context-monitor.js` | Context headroom tracking after subagent completion |
 | `SubagentStart` | `gsd-context-monitor.js` | Context headroom tracking at subagent start |
@@ -405,7 +415,7 @@ Qwen Code supports 15 hook events. GSD registers the following events automatica
 |---|---|---|
 | `SessionStart` | `gsd-check-update.js`, `gsd-session-state.sh` | Update check, session orientation |
 | `PostToolUse` | `gsd-context-monitor.js`, `gsd-read-injection-scanner.js`, `gsd-phase-boundary.sh`, `gsd-graphify-update.sh` | Context monitoring, read-time scan, phase boundary detection |
-| `PreToolUse` | `gsd-prompt-guard.js`, `gsd-read-guard.js`, `gsd-workflow-guard.js`, `gsd-worktree-path-guard.js`, `gsd-validate-commit.sh` | Prompt guard, read-before-edit, workflow + worktree safety, commit validation |
+| `PreToolUse` | `gsd-prompt-guard.js`, `gsd-read-guard.js`, `gsd-workflow-guard.js`, `gsd-worktree-path-guard.js`, `gsd-agent-isolation-guard.js`, `gsd-validate-commit.sh` | Prompt guard, read-before-edit, workflow + worktree safety, agent-dispatch isolation, commit validation |
 | `SubagentStop` | `gsd-context-monitor.js` | Context headroom tracking after subagent completion |
 | `SubagentStart` | `gsd-context-monitor.js` | Context headroom tracking at subagent start |
 | `Stop` | `gsd-context-monitor.js` | Context headroom tracking before model stop |
@@ -473,13 +483,21 @@ GSD's hook-automation and native-MCP-registration integrations are not yet wired
 npx @opengsd/gsd-core@latest --pi --global
 ```
 
+**Override the install directory:**
+
+```bash
+PI_CODING_AGENT_DIR=~/.pi-alt/agent npx @opengsd/gsd-core@latest --pi --global
+```
+
+`PI_CODING_AGENT_DIR` is pi's own upstream override (`getAgentDir()` in pi's `config.ts`) for its global agent directory (`~/.pi/agent` by default) — GSD honors it so the install always lands where pi actually reads ([#3023](https://github.com/open-gsd/gsd-core/issues/3023)). pi also supports a `piConfig.configDir` field (`config.ts`'s `CONFIG_DIR_NAME`) that renames the `.pi` segment, but that field is read from pi's own installed `package.json`, not your project's — it is a white-label/rebranding hook for redistributed pi forks (it sits beside `piConfig.name`, which renames the app itself), not something an end user sets for their own project. GSD's pi descriptor does not target rebranded forks, so `PI_CODING_AGENT_DIR` remains the correct override for a stock pi install.
+
 [pi](https://pi.dev) is a bun-runtime programmatic CLI whose extensions implement pi's own `ExtensionAPI` (`registerCommand`/`registerTool`/`registerProvider`/`pi.on`) rather than a settings-file or slash-markdown surface. GSD ships a single native-extension file:
 
 - **Extension** → `~/.pi/agent/extensions/gsd.js` (global) or `.pi/extensions/gsd.js` (local)
 
 The `.js` suffix is load-bearing: pi auto-discovers extensions by scanning that directory and keeping only names ending in `.ts` or `.js`, and it skips anything else **silently** — no error, no log line. GSD shipped the file as `gsd.cjs` through 1.7.0, which pi therefore never loaded, so `/gsd` never appeared ([#2470](https://github.com/open-gsd/gsd-core/issues/2470)). Upgrading removes the stale `gsd.cjs`; if you had added a manual `extensions` entry in `~/.pi/agent/settings.json` as a workaround, you can drop it.
 
-The extension registers a `/gsd` command and a `gsd_invoke` tool that dispatch GSD commands via a bounded subprocess call to `gsd-core/bin/gsd-tools.cjs` (no fully-populated in-process command-routing hub exists — see the matrix's Stage 2 note). This is a **plugin-only install**: pi has no shared-settings hook surface (`hooksSurface: none`) and, unlike Claude/OpenCode/Kilo, no host-read markdown surface at all — pi's `/gsd` command is registered programmatically by the extension, not discovered from files, so GSD installs the extension plus its universal `gsd-core/` engine payload and the shared `hooks/`/`hooks/lib/` bundle (spawned by the extension itself, not by any config-file hook bus), and does **not** write any `commands/`, `agents/`, or `skills/` directory for pi. The extension bridges GSD's `session_start`/`before_agent_start`/`session_before_compact`/`tool_call` lifecycle events to those staged `hooks/` scripts as bounded, fail-open subprocesses, and steers pi's active model (`modelMode: active`) to a tier-resolved bare anthropic id via `pi.on('before_provider_request', ...)`. See the [`## pi`](../reference/host-integration-capability-matrix.md#pi) section of the host-integration capability matrix for the negotiated axes and citations.
+The extension registers a `/gsd` command and a `gsd_invoke` tool that dispatch GSD commands via a bounded subprocess call to `gsd-core/bin/gsd-tools.cjs` (no fully-populated in-process command-routing hub exists — see the matrix's Stage 2 note). This is a **plugin-only install**: pi has no shared-settings hook surface (`hooksSurface: none`) and, unlike Claude/OpenCode/Kilo, no host-read markdown surface at all — pi's `/gsd` command is registered programmatically by the extension, not discovered from files, so GSD installs the extension plus its universal `gsd-core/` engine payload and the shared `gsd-hooks/`/`gsd-hooks/lib/` bundle (spawned by the extension itself, not by any config-file hook bus), and does **not** write any `commands/`, `agents/`, or `skills/` directory for pi. The bundle lands under `gsd-hooks/` rather than the `hooks/` name every other runtime uses because pi reserves `hooks/` for its own deprecated extension directory and warns on startup whenever that directory merely exists ([#3023](https://github.com/open-gsd/gsd-core/issues/3023)). The extension bridges GSD's `session_start`/`before_agent_start`/`session_before_compact`/`tool_call` lifecycle events to those staged `gsd-hooks/` scripts as bounded, fail-open subprocesses, and steers pi's active model (`modelMode: active`) to a tier-resolved bare anthropic id via `pi.on('before_provider_request', ...)`. See the [`## pi`](../reference/host-integration-capability-matrix.md#pi) section of the host-integration capability matrix for the negotiated axes and citations.
 
 ---
 
@@ -538,7 +556,7 @@ If the command is not found after restart, verify the install directory matches 
 If the installer's global bin directory is not on your `PATH`, it prints a one-time warning with a copy-paste command for your shell. The suggestion list covers `zsh`, `bash`, and `fish` (plus PowerShell, cmd.exe, and Git Bash on Windows). For fish, run the line it prints:
 
 ```fish
-fish_add_path '/path/to/global/bin'
+fish_add_path -- '/path/to/global/bin'
 ```
 
 If the directory is already on your PATH but the installer still warns, open a new fish session (`exec fish`) to pick up the change.

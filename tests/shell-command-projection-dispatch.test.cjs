@@ -1,14 +1,17 @@
 'use strict';
 
-const { describe, test, beforeEach, afterEach } = require('node:test');
+const { describe, test, beforeEach, afterEach, mock } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
+const childProcess = require('node:child_process');
 
 const {
   execGit,
   execNpm,
   execTool,
+  resolveExecutableBinary,
+  projectSpawnInvocation,
   probeTty,
   normalizeContent,
   platformWriteSync,
@@ -16,6 +19,17 @@ const {
   platformEnsureDir,
   dispatchGsdCommand,
   resolveGsdToolsPath,
+  projectPathActionProjection,
+  projectPathExportLine,
+  posixNormalize,
+  PATH_ACTION_REASON,
+  renderShellActionLines,
+  formatManagedHookScriptToken,
+  escapeTomlDoubleQuotedString,
+  escapePowerShellSingleQuoted,
+  escapePosixDoubleQuoted,
+  escapeSingleQuotedShellLiteral,
+  retryRenameSync,
 } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'shell-command-projection.cjs'));
 
 const { createTempGitProject, createTempDir, cleanup } = require('./helpers.cjs');
@@ -101,6 +115,1017 @@ describe('execTool', () => {
   });
 });
 
+// ─── resolveExecutableBinary (#3411) ────────────────────────────────────────
+// Platform is always INJECTED via opts.platform/opts.env — every win32 case
+// runs on macOS/Linux too. See .gsd/phase/feat-3411-windows-binary-seam/50-test-matrix.md.
+
+describe('resolveExecutableBinary (#3411)', () => {
+  test('R1: is exported as a function', () => {
+    assert.equal(typeof resolveExecutableBinary, 'function');
+  });
+
+  test('R2: win32 resolves the .CMD', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo.CMD'), '');
+      const resolved = resolveExecutableBinary('foo', { platform: 'win32', env: { PATH: dir, PATHEXT: '.EXE;.CMD' } });
+      assert.equal(resolved, path.join(dir, 'foo.CMD'));
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('R3: win32 resolves the .EXE', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo.EXE'), '');
+      const resolved = resolveExecutableBinary('foo', { platform: 'win32', env: { PATH: dir, PATHEXT: '.EXE;.CMD' } });
+      assert.equal(resolved, path.join(dir, 'foo.EXE'));
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('R4: never the extensionless shim', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'codex'), '');
+      fs.writeFileSync(path.join(dir, 'codex.CMD'), '');
+      const resolved = resolveExecutableBinary('codex', { platform: 'win32', env: { PATH: dir, PATHEXT: '.EXE;.CMD' } });
+      assert.equal(resolved, path.join(dir, 'codex.CMD'));
+      assert.match(path.basename(resolved), /\.(cmd|bat)$/i);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('R5: extensionless-only → null', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'codex'), '');
+      const resolved = resolveExecutableBinary('codex', { platform: 'win32', env: { PATH: dir, PATHEXT: '.EXE;.CMD' } });
+      assert.equal(resolved, null);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('R6: honors PATHEXT order', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'gem.CMD'), '');
+      fs.writeFileSync(path.join(dir, 'gem.EXE'), '');
+      const cmdFirst = resolveExecutableBinary('gem', { platform: 'win32', env: { PATH: dir, PATHEXT: '.CMD;.EXE' } });
+      assert.equal(cmdFirst, path.join(dir, 'gem.CMD'));
+      const exeFirst = resolveExecutableBinary('gem', { platform: 'win32', env: { PATH: dir, PATHEXT: '.EXE;.CMD' } });
+      assert.equal(exeFirst, path.join(dir, 'gem.EXE'));
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('R7: lowercase PATHEXT', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'gem.cmd'), '');
+      const resolved = resolveExecutableBinary('gem', { platform: 'win32', env: { PATH: dir, PATHEXT: '.cmd' } });
+      assert.equal(resolved, path.join(dir, 'gem.cmd'));
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('R8: PATHEXT default', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'gem.CMD'), '');
+      const resolved = resolveExecutableBinary('gem', { platform: 'win32', env: { PATH: dir } });
+      assert.equal(resolved, path.join(dir, 'gem.CMD'));
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('R9: PATHEXT-suffixed name resolves as-is', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'tool.exe'), '');
+      const resolved = resolveExecutableBinary('tool.exe', { platform: 'win32', env: { PATH: dir, PATHEXT: '.EXE' } });
+      assert.equal(resolved, path.join(dir, 'tool.exe'));
+      assert.notEqual(resolved, path.join(dir, 'tool.exe.EXE'));
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('R10: non-PATHEXT suffix is not an extension', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'note.txt'), '');
+      const resolved = resolveExecutableBinary('note.txt', { platform: 'win32', env: { PATH: dir, PATHEXT: '.EXE;.CMD' } });
+      assert.equal(resolved, null);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('R11: append loop over a dotted name', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'note.txt.EXE'), '');
+      const resolved = resolveExecutableBinary('note.txt', { platform: 'win32', env: { PATH: dir, PATHEXT: '.EXE' } });
+      assert.equal(resolved, path.join(dir, 'note.txt.EXE'));
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('R12: PATH order', () => {
+    const dir1 = createTempDir();
+    const dir2 = createTempDir();
+    const dir3 = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir2, 'foo.EXE'), '');
+      const PATH = [dir1, dir2, dir3].join(path.delimiter);
+      const resolved = resolveExecutableBinary('foo', { platform: 'win32', env: { PATH, PATHEXT: '.EXE' } });
+      assert.equal(resolved, path.join(dir2, 'foo.EXE'));
+    } finally {
+      cleanup(dir1);
+      cleanup(dir2);
+      cleanup(dir3);
+    }
+  });
+
+  test('R13: empty PATH → null', () => {
+    const resolved = resolveExecutableBinary('foo', { platform: 'win32', env: { PATH: '' } });
+    assert.equal(resolved, null);
+  });
+
+  test('R14: empty PATH segments', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo.EXE'), '');
+      const PATH = dir + path.delimiter + path.delimiter + dir;
+      assert.doesNotThrow(() => {
+        const resolved = resolveExecutableBinary('foo', { platform: 'win32', env: { PATH, PATHEXT: '.EXE' } });
+        assert.equal(resolved, path.join(dir, 'foo.EXE'));
+      });
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('R15: path-like passthrough', () => {
+    const dir = createTempDir();
+    try {
+      const staged = path.join(dir, 'foo.cmd');
+      fs.writeFileSync(staged, '');
+      const resolved = resolveExecutableBinary(staged, { platform: 'win32', env: { PATH: dir } });
+      assert.equal(resolved, staged);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('R16: missing path-like → null', () => {
+    const dir = createTempDir();
+    try {
+      const missing = path.join(dir, 'nope.cmd');
+      const resolved = resolveExecutableBinary(missing, { platform: 'win32', env: { PATH: dir } });
+      assert.equal(resolved, null);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('R17: directory is not a binary', () => {
+    const dir = createTempDir();
+    try {
+      const resolved = resolveExecutableBinary(dir, { platform: 'win32', env: { PATH: dir } });
+      assert.equal(resolved, null);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('R18: empty name short-circuits', () => {
+    assert.equal(resolveExecutableBinary('', { platform: 'win32', env: { PATH: '/x' } }), null);
+    assert.equal(resolveExecutableBinary(null, { platform: 'win32', env: { PATH: '/x' } }), null);
+    assert.equal(resolveExecutableBinary(undefined, { platform: 'win32', env: { PATH: '/x' } }), null);
+  });
+
+  test('R19: posix resolves bare', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo'), '');
+      const resolved = resolveExecutableBinary('foo', { platform: 'linux', env: { PATH: dir } });
+      assert.equal(resolved, path.join(dir, 'foo'));
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('R20: posix miss → null', () => {
+    const dir = createTempDir();
+    try {
+      const resolved = resolveExecutableBinary('foo', { platform: 'linux', env: { PATH: dir } });
+      assert.equal(resolved, null);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('R21: posix ignores PATHEXT', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'gem.CMD'), '');
+      const resolved = resolveExecutableBinary('gem', { platform: 'linux', env: { PATH: dir, PATHEXT: '.CMD' } });
+      assert.equal(resolved, null);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('R22: unreadable candidate is skipped', () => {
+    const dir1 = createTempDir();
+    const dir2 = createTempDir();
+    const originalStatSync = fs.statSync;
+    try {
+      fs.writeFileSync(path.join(dir2, 'foo.EXE'), '');
+      const firstCandidate = path.join(dir1, 'foo.EXE');
+      fs.statSync = (candidate, ...rest) => {
+        if (candidate === firstCandidate) {
+          throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+        }
+        return originalStatSync(candidate, ...rest);
+      };
+      const PATH = [dir1, dir2].join(path.delimiter);
+      const resolved = resolveExecutableBinary('foo', { platform: 'win32', env: { PATH, PATHEXT: '.EXE' } });
+      assert.equal(resolved, path.join(dir2, 'foo.EXE'));
+    } finally {
+      fs.statSync = originalStatSync;
+      cleanup(dir1);
+      cleanup(dir2);
+    }
+  });
+
+  test('R23: resolves when PATH is spelled Path (Windows casing)', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo.CMD'), '');
+      const resolved = resolveExecutableBinary('foo', { platform: 'win32', env: { Path: dir, PATHEXT: '.CMD' } });
+      assert.equal(resolved, path.join(dir, 'foo.CMD'));
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('R24: resolves when PATHEXT is spelled Pathext', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo.XYZ'), '');
+      const resolved = resolveExecutableBinary('foo', { platform: 'win32', env: { PATH: dir, Pathext: '.XYZ' } });
+      assert.equal(resolved, path.join(dir, 'foo.XYZ'));
+
+      // Negative control: without the differently-cased Pathext key, '.XYZ'
+      // is not in the default PATHEXT, so resolution must fail.
+      const unresolved = resolveExecutableBinary('foo', { platform: 'win32', env: { PATH: dir } });
+      assert.equal(unresolved, null);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('R25: an exact-case key wins over a differently-cased one', () => {
+    const dirExact = createTempDir();
+    const dirOther = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dirExact, 'foo.CMD'), '');
+      const resolved = resolveExecutableBinary('foo', {
+        platform: 'win32',
+        env: { PATH: dirExact, Path: dirOther, PATHEXT: '.CMD' },
+      });
+      assert.equal(resolved, path.join(dirExact, 'foo.CMD'));
+    } finally {
+      cleanup(dirExact);
+      cleanup(dirOther);
+    }
+  });
+});
+
+// ─── resolveExecutableBinary seam options (#3618) ───────────────────────────
+// prependPaths / requireExecutable — both opt-in, both default off, so
+// Phase 1 callers (R1-R25 above, P1-P16 below) stay byte-identical. See
+// .gsd/phase/chore-3618-fallow-binary-resolution/50-test-matrix.md (S1-S12).
+
+describe('resolveExecutableBinary seam options (#3618)', () => {
+  test('S1: prependPaths with binary only in dirA resolves in dirA', () => {
+    const dirA = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dirA, 'foo'), '');
+      const resolved = resolveExecutableBinary('foo', {
+        platform: 'linux',
+        env: { PATH: '' },
+        prependPaths: [dirA],
+      });
+      assert.equal(resolved, path.join(dirA, 'foo'));
+    } finally {
+      cleanup(dirA);
+    }
+  });
+
+  test('S2: binary in both prependPaths dir and env.PATH — the prependPaths copy wins (precedence)', () => {
+    const dirA = createTempDir();
+    const dirB = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dirA, 'foo'), '');
+      fs.writeFileSync(path.join(dirB, 'foo'), '');
+      const resolved = resolveExecutableBinary('foo', {
+        platform: 'linux',
+        env: { PATH: dirB },
+        prependPaths: [dirA],
+      });
+      assert.equal(resolved, path.join(dirA, 'foo'));
+      assert.notEqual(resolved, path.join(dirB, 'foo'));
+    } finally {
+      cleanup(dirA);
+      cleanup(dirB);
+    }
+  });
+
+  test('S3: prependPaths: [] is identical to omitting it', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo'), '');
+      const withEmpty = resolveExecutableBinary('foo', { platform: 'linux', env: { PATH: dir }, prependPaths: [] });
+      const withOmitted = resolveExecutableBinary('foo', { platform: 'linux', env: { PATH: dir } });
+      assert.equal(withEmpty, path.join(dir, 'foo'));
+      assert.equal(withEmpty, withOmitted);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('S4: prependPaths given, binary only on env.PATH — falls through to PATH', () => {
+    const dirA = createTempDir();
+    const dirB = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dirB, 'foo'), '');
+      const resolved = resolveExecutableBinary('foo', {
+        platform: 'linux',
+        env: { PATH: dirB },
+        prependPaths: [dirA],
+      });
+      assert.equal(resolved, path.join(dirB, 'foo'));
+    } finally {
+      cleanup(dirA);
+      cleanup(dirB);
+    }
+  });
+
+  test('S5: prependPaths with two dirs, binary in the second — first-match wins, in array order', () => {
+    const dir1 = createTempDir();
+    const dir2 = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir2, 'foo'), '');
+      const resolved = resolveExecutableBinary('foo', {
+        platform: 'linux',
+        env: { PATH: '' },
+        prependPaths: [dir1, dir2],
+      });
+      assert.equal(resolved, path.join(dir2, 'foo'));
+      // dir1 is first in the array but has no match, so dir2 wins — confirms
+      // the search follows array order, not the reverse.
+      assert.notEqual(resolved, path.join(dir1, 'foo'));
+    } finally {
+      cleanup(dir1);
+      cleanup(dir2);
+    }
+  });
+
+  test('S6: win32 + prependPaths — PATHEXT applies inside the prepended dir too', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo.CMD'), '');
+      const resolved = resolveExecutableBinary('foo', {
+        platform: 'win32',
+        env: { PATH: '', PATHEXT: '.EXE;.CMD' },
+        prependPaths: [dir],
+      });
+      assert.equal(resolved, path.join(dir, 'foo.CMD'));
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('S7: requireExecutable true, POSIX, file exists and is executable — resolves', () => {
+    const dir = createTempDir();
+    const originalAccessSync = fs.accessSync;
+    try {
+      fs.writeFileSync(path.join(dir, 'foo'), '');
+      // Executability is forced deterministically via accessSync monkeypatch
+      // rather than chmod — root Docker bypasses mode bits (see file header).
+      fs.accessSync = () => {};
+      const resolved = resolveExecutableBinary('foo', {
+        platform: 'linux',
+        env: { PATH: dir },
+        requireExecutable: true,
+      });
+      assert.equal(resolved, path.join(dir, 'foo'));
+    } finally {
+      fs.accessSync = originalAccessSync;
+      cleanup(dir);
+    }
+  });
+
+  test('S8: requireExecutable true, POSIX, accessSync throws EACCES — null', () => {
+    const dir = createTempDir();
+    const originalAccessSync = fs.accessSync;
+    try {
+      fs.writeFileSync(path.join(dir, 'foo'), '');
+      fs.accessSync = () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); };
+      const resolved = resolveExecutableBinary('foo', {
+        platform: 'linux',
+        env: { PATH: dir },
+        requireExecutable: true,
+      });
+      assert.equal(resolved, null);
+    } finally {
+      fs.accessSync = originalAccessSync;
+      cleanup(dir);
+    }
+  });
+
+  test('S9: requireExecutable omitted — resolves anyway and accessSync is never consulted', () => {
+    const dir = createTempDir();
+    const originalAccessSync = fs.accessSync;
+    let called = false;
+    try {
+      fs.writeFileSync(path.join(dir, 'foo'), '');
+      fs.accessSync = () => {
+        called = true;
+        throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      };
+      const resolved = resolveExecutableBinary('foo', { platform: 'linux', env: { PATH: dir } });
+      assert.equal(resolved, path.join(dir, 'foo'));
+      assert.equal(called, false, 'accessSync must not be consulted when requireExecutable is not set');
+    } finally {
+      fs.accessSync = originalAccessSync;
+      cleanup(dir);
+    }
+  });
+
+  test('S10: requireExecutable true + win32 is a no-op — resolves without consulting accessSync', () => {
+    const dir = createTempDir();
+    const originalAccessSync = fs.accessSync;
+    let called = false;
+    try {
+      fs.writeFileSync(path.join(dir, 'foo.CMD'), '');
+      fs.accessSync = () => {
+        called = true;
+        throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      };
+      const resolved = resolveExecutableBinary('foo', {
+        platform: 'win32',
+        env: { PATH: dir, PATHEXT: '.CMD' },
+        requireExecutable: true,
+      });
+      assert.equal(resolved, path.join(dir, 'foo.CMD'));
+      assert.equal(called, false, 'accessSync must never be consulted on win32');
+    } finally {
+      fs.accessSync = originalAccessSync;
+      cleanup(dir);
+    }
+  });
+
+  test('S11: requireExecutable true + path-like name — executability still enforced on the direct path', () => {
+    const dir = createTempDir();
+    const originalAccessSync = fs.accessSync;
+    try {
+      const staged = path.join(dir, 'foo');
+      fs.writeFileSync(staged, '');
+      fs.accessSync = () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); };
+      const resolved = resolveExecutableBinary(staged, {
+        platform: 'linux',
+        env: { PATH: '' },
+        requireExecutable: true,
+      });
+      assert.equal(resolved, null);
+    } finally {
+      fs.accessSync = originalAccessSync;
+      cleanup(dir);
+    }
+  });
+
+  test('S12: neither seam option set behaves exactly as before (win32 and posix)', () => {
+    const dirWin = createTempDir();
+    const dirPosix = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dirWin, 'foo.CMD'), '');
+      const win = resolveExecutableBinary('foo', { platform: 'win32', env: { PATH: dirWin, PATHEXT: '.CMD' } });
+      assert.equal(win, path.join(dirWin, 'foo.CMD'));
+
+      fs.writeFileSync(path.join(dirPosix, 'foo'), '');
+      const posix = resolveExecutableBinary('foo', { platform: 'linux', env: { PATH: dirPosix } });
+      assert.equal(posix, path.join(dirPosix, 'foo'));
+    } finally {
+      cleanup(dirWin);
+      cleanup(dirPosix);
+    }
+  });
+});
+
+// ─── resolveExecutableBinary pathOverride (#3619, epic #3411 Phase 3) ──────
+// "Search THIS PATH, but read everything else — PATHEXT included — from the
+// ambient environment." Added so resolveFallowBinary can hand the seam a
+// search path without also hand-threading PATHEXT (a private PATHEXT read
+// is exactly the shape local/no-private-binary-resolution forbids outside
+// this seam). See .gsd/phase/chore-3619-no-bare-binary-spawn/50-test-matrix.md (O1-O7).
+
+describe('resolveExecutableBinary pathOverride (#3619)', () => {
+  test('O1: pathOverride omitted — identical to today, env.PATH is used', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo'), '');
+      const resolved = resolveExecutableBinary('foo', { platform: 'linux', env: { PATH: dir } });
+      assert.equal(resolved, path.join(dir, 'foo'));
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('O2: pathOverride set, binary in the pathOverride dir, env.PATH points elsewhere — resolves via pathOverride, env.PATH ignored', () => {
+    const dirA = createTempDir();
+    const dirElsewhere = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dirA, 'foo'), '');
+      const resolved = resolveExecutableBinary('foo', {
+        platform: 'linux',
+        env: { PATH: dirElsewhere },
+        pathOverride: dirA,
+      });
+      assert.equal(resolved, path.join(dirA, 'foo'));
+    } finally {
+      cleanup(dirA);
+      cleanup(dirElsewhere);
+    }
+  });
+
+  test("O3: pathOverride: '' with a populated env.PATH — null; empty means empty, not a fallback to env.PATH", () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo'), '');
+      const resolved = resolveExecutableBinary('foo', {
+        platform: 'linux',
+        env: { PATH: dir },
+        pathOverride: '',
+      });
+      assert.equal(resolved, null);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('O4: pathOverride + prependPaths — prepended dirs still come first', () => {
+    const dirPrepend = createTempDir();
+    const dirOverride = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dirPrepend, 'foo'), '');
+      fs.writeFileSync(path.join(dirOverride, 'foo'), '');
+      const resolved = resolveExecutableBinary('foo', {
+        platform: 'linux',
+        pathOverride: dirOverride,
+        prependPaths: [dirPrepend],
+      });
+      assert.equal(resolved, path.join(dirPrepend, 'foo'));
+      assert.notEqual(resolved, path.join(dirOverride, 'foo'));
+    } finally {
+      cleanup(dirPrepend);
+      cleanup(dirOverride);
+    }
+  });
+
+  test('O5: pathOverride set, opts.env omitted, win32 — PATHEXT still comes from the ambient process.env, not DEFAULT_PATHEXT', () => {
+    const dir = createTempDir();
+    const originalPathext = process.env.PATHEXT;
+    try {
+      process.env.PATHEXT = '.XYZ';
+      fs.writeFileSync(path.join(dir, 'foo.XYZ'), '');
+      const resolved = resolveExecutableBinary('foo', { platform: 'win32', pathOverride: dir });
+      assert.equal(resolved, path.join(dir, 'foo.XYZ'));
+    } finally {
+      if (originalPathext === undefined) delete process.env.PATHEXT; else process.env.PATHEXT = originalPathext;
+      cleanup(dir);
+    }
+  });
+
+  test('O6: pathOverride AND env.PATH both set — pathOverride wins (assert WHICH path resolved, not merely that something resolved)', () => {
+    const dirOverride = createTempDir();
+    const dirEnvPath = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dirOverride, 'foo'), '');
+      fs.writeFileSync(path.join(dirEnvPath, 'foo'), '');
+      const resolved = resolveExecutableBinary('foo', {
+        platform: 'linux',
+        env: { PATH: dirEnvPath },
+        pathOverride: dirOverride,
+      });
+      assert.equal(resolved, path.join(dirOverride, 'foo'));
+      assert.notEqual(resolved, path.join(dirEnvPath, 'foo'));
+    } finally {
+      cleanup(dirOverride);
+      cleanup(dirEnvPath);
+    }
+  });
+
+  test('O7: multi-segment pathOverride, binary in the second segment — first-match wins, in order', () => {
+    const dir1 = createTempDir();
+    const dir2 = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir2, 'foo'), '');
+      const pathOverride = [dir1, dir2].join(path.delimiter);
+      const resolved = resolveExecutableBinary('foo', { platform: 'linux', pathOverride });
+      assert.equal(resolved, path.join(dir2, 'foo'));
+      assert.notEqual(resolved, path.join(dir1, 'foo'));
+    } finally {
+      cleanup(dir1);
+      cleanup(dir2);
+    }
+  });
+});
+
+// ─── projectSpawnInvocation (#3411) ─────────────────────────────────────────
+
+// Mirrors the seam's own `_cmdQuoteToken` (a literal `"` is doubled) so
+// expectations here are built the same way the implementation builds them,
+// without importing the private helper.
+function _q(token) {
+  return `"${String(token).replace(/"/g, '""')}"`;
+}
+
+describe('projectSpawnInvocation (#3411)', () => {
+  test('P1: .CMD mediates through cmd.exe', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo.CMD'), '');
+      const resolved = path.join(dir, 'foo.CMD');
+      const env = { PATH: dir, PATHEXT: '.CMD', ComSpec: 'C:\\Windows\\System32\\cmd.exe' };
+      const result = projectSpawnInvocation('foo', ['a', 'b'], { platform: 'win32', env });
+      assert.deepEqual(result, {
+        command: 'C:\\Windows\\System32\\cmd.exe',
+        args: ['/d', '/s', '/c', `"${_q(resolved)} ${_q('a')} ${_q('b')}"`],
+        resolved,
+        windowsVerbatimArguments: true,
+      });
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('P2: .BAT mediates', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo.BAT'), '');
+      const resolved = path.join(dir, 'foo.BAT');
+      const env = { PATH: dir, PATHEXT: '.BAT', ComSpec: 'C:\\Windows\\System32\\cmd.exe' };
+      const result = projectSpawnInvocation('foo', ['a'], { platform: 'win32', env });
+      assert.deepEqual(result, {
+        command: 'C:\\Windows\\System32\\cmd.exe',
+        args: ['/d', '/s', '/c', `"${_q(resolved)} ${_q('a')}"`],
+        resolved,
+        windowsVerbatimArguments: true,
+      });
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('P3: .EXE spawns directly', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo.EXE'), '');
+      const resolved = path.join(dir, 'foo.EXE');
+      const env = { PATH: dir, PATHEXT: '.EXE' };
+      const result = projectSpawnInvocation('foo', ['a'], { platform: 'win32', env });
+      assert.deepEqual(result, { command: resolved, args: ['a'], resolved });
+      assert.equal(result.args.includes('/c'), false);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('P4: ComSpec default', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo.CMD'), '');
+      const env = { PATH: dir, PATHEXT: '.CMD' };
+      const result = projectSpawnInvocation('foo', [], { platform: 'win32', env });
+      assert.equal(result.command, 'cmd.exe');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('P5: unresolved never mediates', () => {
+    const dir = createTempDir();
+    try {
+      const env = { PATH: dir, PATHEXT: '.EXE;.CMD', ComSpec: 'C:\\Windows\\System32\\cmd.exe' };
+      const result = projectSpawnInvocation('missing-tool', ['a'], { platform: 'win32', env });
+      assert.deepEqual(result, { command: 'missing-tool', args: ['a'], resolved: null });
+      assert.equal(result.command.includes('cmd'), false);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('P6: posix is a strict no-op', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo.CMD'), '');
+      const env = { PATH: dir, PATHEXT: '.CMD', ComSpec: 'C:\\Windows\\System32\\cmd.exe' };
+      const result = projectSpawnInvocation('foo', ['a'], { platform: 'linux', env });
+      assert.deepEqual(result, { command: 'foo', args: ['a'], resolved: null });
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('P7: empty argv', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo.CMD'), '');
+      const resolved = path.join(dir, 'foo.CMD');
+      const env = { PATH: dir, PATHEXT: '.CMD' };
+      const result = projectSpawnInvocation('foo', [], { platform: 'win32', env });
+      assert.deepEqual(result.args, ['/d', '/s', '/c', `"${_q(resolved)}"`]);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('P8: argv is not shell-interpolated', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo.CMD'), '');
+      const env = { PATH: dir, PATHEXT: '.CMD' };
+      const originalArgs = ['a b', 'x&y', 'q"z'];
+      const result = projectSpawnInvocation('foo', originalArgs, { platform: 'win32', env });
+      // Each original argument content survives intact — quoted, never split or
+      // concatenated by cmd's own metacharacter parsing.
+      const line = result.args[3];
+      assert.ok(line.includes(_q('a b')));
+      assert.ok(line.includes(_q('x&y')));
+      assert.ok(line.includes(_q('q"z')));
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('P9: unresolved name declaring .cmd still mediates', () => {
+    const dir = createTempDir();
+    try {
+      const env = { PATH: dir, PATHEXT: '.EXE', ComSpec: 'C:\\Windows\\System32\\cmd.exe' };
+      const result = projectSpawnInvocation('missing.cmd', ['a'], { platform: 'win32', env });
+      assert.deepEqual(result, {
+        command: 'C:\\Windows\\System32\\cmd.exe',
+        args: ['/d', '/s', '/c', `"${_q('missing.cmd')} ${_q('a')}"`],
+        resolved: null,
+        windowsVerbatimArguments: true,
+      });
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('P10: unresolved BARE name still does not mediate', () => {
+    const dir = createTempDir();
+    try {
+      const env = { PATH: dir, PATHEXT: '.EXE', ComSpec: 'C:\\Windows\\System32\\cmd.exe' };
+      const result = projectSpawnInvocation('missing', ['a'], { platform: 'win32', env });
+      assert.deepEqual(result, { command: 'missing', args: ['a'], resolved: null });
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('P11: mediated args are force-quoted so cmd metacharacters cannot split', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo.CMD'), '');
+      const env = { PATH: dir, PATHEXT: '.CMD', ComSpec: 'C:\\Windows\\System32\\cmd.exe' };
+      const result = projectSpawnInvocation('foo', ['a&calc', 'b|c', 'd>e'], { platform: 'win32', env });
+      assert.equal(result.windowsVerbatimArguments, true);
+      assert.equal(result.args.length, 4);
+      const line = result.args[3];
+      assert.ok(line.includes('"a&calc"'));
+      assert.ok(line.includes('"b|c"'));
+      assert.ok(line.includes('"d>e"'));
+      // The bare unquoted sequence must not appear outside of a quoted token —
+      // every occurrence of `a&calc` in the line is immediately preceded by a
+      // quote and followed by a quote.
+      let idx = -1;
+      while ((idx = line.indexOf('a&calc', idx + 1)) !== -1) {
+        assert.equal(line[idx - 1], '"');
+        assert.equal(line[idx + 'a&calc'.length], '"');
+      }
+      assert.equal(line.startsWith('"'), true);
+      assert.equal(line.endsWith('"'), true);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('P12: embedded quotes are doubled', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo.CMD'), '');
+      const env = { PATH: dir, PATHEXT: '.CMD' };
+      const result = projectSpawnInvocation('foo', ['he said "hi"'], { platform: 'win32', env });
+      const line = result.args[3];
+      assert.ok(line.includes('he said ""hi""'));
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('P13: an argument containing a newline is not mediated', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo.CMD'), '');
+      const resolved = path.join(dir, 'foo.CMD');
+      const env = { PATH: dir, PATHEXT: '.CMD', ComSpec: 'C:\\Windows\\System32\\cmd.exe' };
+      const result = projectSpawnInvocation('foo', ['a\nb'], { platform: 'win32', env });
+      assert.deepEqual(result, { command: resolved, args: ['a\nb'], resolved });
+      assert.equal(result.args.includes('/d'), false);
+      assert.equal(result.windowsVerbatimArguments, undefined);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('P14: non-mediated returns never set windowsVerbatimArguments', () => {
+    const dir = createTempDir();
+    try {
+      // POSIX no-op.
+      const posixResult = projectSpawnInvocation('foo', ['a'], { platform: 'linux', env: {} });
+      assert.equal(posixResult.windowsVerbatimArguments, undefined);
+
+      // Unresolved bare name.
+      const bareEnv = { PATH: dir, PATHEXT: '.EXE', ComSpec: 'C:\\Windows\\System32\\cmd.exe' };
+      const bareResult = projectSpawnInvocation('missing', ['a'], { platform: 'win32', env: bareEnv });
+      assert.equal(bareResult.windowsVerbatimArguments, undefined);
+
+      // Resolved .EXE.
+      fs.writeFileSync(path.join(dir, 'foo.EXE'), '');
+      const exeEnv = { PATH: dir, PATHEXT: '.EXE' };
+      const exeResult = projectSpawnInvocation('foo', ['a'], { platform: 'win32', env: exeEnv });
+      assert.equal(exeResult.windowsVerbatimArguments, undefined);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test("P15: the mediated line round-trips through cmd's own outer-quote rule", () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo.CMD'), '');
+      const resolved = path.join(dir, 'foo.CMD');
+      const env = { PATH: dir, PATHEXT: '.CMD', ComSpec: 'C:\\Windows\\System32\\cmd.exe' };
+      const result = projectSpawnInvocation('foo', ['a'], { platform: 'win32', env });
+      const line = result.args[3];
+      // Outer pair immediately followed by the target's own opening quote.
+      assert.equal(line.startsWith('""'), true);
+      // Stripping the outer pair leaves the individually-quoted tokens, whose
+      // first token is the quoted resolved path.
+      const stripped = line.slice(1, -1);
+      assert.equal(stripped.startsWith(_q(resolved)), true);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('P16: ComSpec is read case-insensitively', () => {
+    const dir = createTempDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'foo.CMD'), '');
+      const env = { PATH: dir, PATHEXT: '.CMD', COMSPEC: 'C:\\custom\\cmd.exe' };
+      const result = projectSpawnInvocation('foo', ['a'], { platform: 'win32', env });
+      assert.equal(result.command, 'C:\\custom\\cmd.exe');
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
+// ─── execTool (#3411 windows resolution) ────────────────────────────────────
+// Drives spawnSync via mock.method(childProcess, 'spawnSync') — the seam
+// imports childProcess as a namespace precisely so this interception works.
+
+describe('execTool (#3411 windows resolution)', () => {
+  test('E4: declared name survives into stderr', (t) => {
+    mock.method(childProcess, 'spawnSync', () => ({
+      error: Object.assign(new Error('x'), { code: 'ENOENT' }),
+    }));
+    t.after(() => mock.restoreAll());
+
+    const result = execTool('some-absent-tool', []);
+    assert.equal(result.stderr, 'some-absent-tool: not found');
+    assert.equal(result.exitCode, 127);
+  });
+
+  test('E6: posix passes the bare name', (t) => {
+    if (process.platform === 'win32') { t.skip('posix-only assertion'); return; }
+
+    let receivedCommand = null;
+    mock.method(childProcess, 'spawnSync', (command) => {
+      receivedCommand = command;
+      return { status: 0, stdout: '', stderr: '', signal: null, error: null };
+    });
+    t.after(() => mock.restoreAll());
+
+    execTool('some-declared-name', []);
+    assert.equal(receivedCommand, 'some-declared-name');
+  });
+
+  test('E7: execTool spawns the DECLARED name when no mediation is required', (t) => {
+    let received = null;
+    mock.method(childProcess, 'spawnSync', (command, args) => {
+      received = { command, args };
+      return { status: 0, stdout: '', stderr: '', signal: null, error: null };
+    });
+    t.after(() => mock.restoreAll());
+
+    execTool('some-plain-tool', ['--x']);
+
+    assert.equal(received.command, 'some-plain-tool');
+    assert.deepEqual(received.args, ['--x']);
+  });
+
+  test('E1: posix execTool still runs a real subprocess', () => {
+    const result = execTool(process.execPath, ['-e', 'process.stdout.write("ok")']);
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout, 'ok');
+  });
+
+  test('E2: posix ENOENT contract', (t) => {
+    if (process.platform === 'win32') { t.skip('posix ENOENT shape'); return; }
+
+    const result = execTool('gsd-definitely-absent-binary-9f3a', []);
+    assert.equal(result.exitCode, 127);
+    assert.equal(result.stderr, 'gsd-definitely-absent-binary-9f3a: not found');
+  });
+
+  test('E3: execTool mediates a .cmd through cmd.exe on win32', (t) => {
+    const dir = createTempDir();
+    fs.writeFileSync(path.join(dir, 'foo.CMD'), '');
+    const resolved = path.join(dir, 'foo.CMD');
+
+    let received = null;
+    mock.method(childProcess, 'spawnSync', (command, args) => {
+      received = { command, args };
+      return { status: 0, stdout: '', stderr: '', signal: null, error: null };
+    });
+    t.after(() => {
+      mock.restoreAll();
+      cleanup(dir);
+    });
+
+    execTool('foo', ['x'], { env: { PATH: dir, PATHEXT: '.CMD', ComSpec: 'C:\\Windows\\System32\\cmd.exe' } });
+
+    if (process.platform === 'win32') {
+      assert.deepEqual(received, {
+        command: 'C:\\Windows\\System32\\cmd.exe',
+        args: ['/d', '/s', '/c', `"${_q(resolved)} ${_q('x')}"`],
+      });
+    } else {
+      // Non-win32: projectSpawnInvocation is a strict no-op (process.platform
+      // drives it, not the injected env), so execTool must hand spawnSync the
+      // bare declared name unchanged — the POSIX no-op contract.
+      assert.deepEqual(received, { command: 'foo', args: ['x'] });
+    }
+  });
+
+  test('E5: options survive mediation', (t) => {
+    let receivedOptions = null;
+    mock.method(childProcess, 'spawnSync', (_command, _args, options) => {
+      receivedOptions = options;
+      return { status: 0, stdout: '', stderr: '', signal: null, error: null };
+    });
+    t.after(() => mock.restoreAll());
+
+    execTool('some-tool', [], { cwd: '/tmp/x', env: { FOO: 'bar' }, timeout: 1234 });
+
+    assert.equal(receivedOptions.cwd, '/tmp/x');
+    assert.equal(receivedOptions.timeout, 1234);
+    assert.equal(receivedOptions.env.FOO, 'bar');
+    // Case-insensitive: process.env's actual key casing is OS-dependent (Windows
+    // conventionally sets `Path`, not `PATH`), and the merged object here is a
+    // plain spread of process.env — it no longer benefits from the case-insensitive
+    // proxy behavior process.env itself has.
+    assert.equal(Object.keys(receivedOptions.env).some((k) => k.toLowerCase() === 'path'), true);
+  });
+});
+
 // ─── dispatchGsdCommand (#2102 Stage 2 — subprocess-shim dispatch to gsd-tools.cjs) ──
 //
 // The command-routing hub (`createHub()`) has no fully-populated factory
@@ -113,7 +1138,7 @@ describe('dispatchGsdCommand', () => {
   let tmpDir;
 
   beforeEach(() => { tmpDir = createTempDir(); });
-  afterEach(() => { cleanup(tmpDir); });
+  afterEach(() => { cleanup(tmpDir); mock.restoreAll(); });
 
   test('resolveGsdToolsPath resolves to the real gsd-tools.cjs on disk', () => {
     const toolsPath = resolveGsdToolsPath();
@@ -122,6 +1147,12 @@ describe('dispatchGsdCommand', () => {
   });
 
   test('a valid read-only family/subcommand dispatches for real and returns ok:true + non-empty stdout', () => {
+    // #3217 (ADR-3180 §7.6 rule 4): a free-form ROADMAP.md (no version
+    // token) is COMPLETE scope for windowing (§7.1) — without this, a
+    // bare temp dir has no ROADMAP.md at all (UNREADABLE) and `percent`
+    // is withheld (null), breaking this reachability proxy.
+    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
     const result = dispatchGsdCommand({ family: 'progress', subcommand: 'json', cwd: tmpDir });
     assert.equal(result.ok, true, `expected ok:true, got: ${JSON.stringify(result)}`);
     assert.equal(typeof result.stdout, 'string');
@@ -170,6 +1201,26 @@ describe('dispatchGsdCommand', () => {
       assert.equal(result.ok, false);
       assert.equal(result.timedOut, true);
     });
+  });
+
+  // #3050 item 4: this site (dispatchGsdCommand's `timedOut` derivation) now
+  // routes through the shared isSpawnTimeout predicate, which drops the
+  // `signal === 'SIGTERM'` requirement — a Windows-shaped timeout (no signal,
+  // only error.code === 'ETIMEDOUT') must still be detected. The real-timeout
+  // test above only exercises whatever shape THIS OS's spawnSync happens to
+  // produce (SIGTERM on POSIX); mocking spawnSync proves the Windows shape too.
+  test('Windows-shaped timeout (no signal, error.code ETIMEDOUT) is still reported as timedOut:true (#3050)', () => {
+    mock.method(childProcess, 'spawnSync', () => ({
+      status: null,
+      stdout: '',
+      stderr: '',
+      signal: null,
+      error: Object.assign(new Error('spawnSync ETIMEDOUT'), { code: 'ETIMEDOUT' }),
+    }));
+
+    const result = dispatchGsdCommand({ family: 'progress', subcommand: 'json', cwd: tmpDir });
+    assert.equal(result.ok, false);
+    assert.equal(result.timedOut, true);
   });
 });
 
@@ -486,7 +1537,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 
 const projection = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'shell-command-projection.cjs'));
-const install = require(path.join(__dirname, '..', 'bin', 'install.js'));
+const hooksSurface = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'runtime-hooks-surface.cjs'));
 
 const {
   hookCommandNeedsPowerShellCallOperator,
@@ -497,7 +1548,7 @@ const {
   projectLegacySettingsHookCommand,
   projectPortableHookBaseDir,
 } = projection;
-const { buildHookCommand, rewriteLegacyManagedNodeHookCommands } = install;
+const { buildHookCommand, rewriteLegacyManagedNodeHookCommands } = hooksSurface;
 
 describe('bug #3413: Shell Command Projection Module uses runtime-aware hook policy', () => {
   test('#1928: no current runtime needs the PowerShell call operator (seam inert after gemini removal)', () => {
@@ -940,7 +1991,9 @@ describe('bug #3441: PATH guidance is projected from typed shell action IR', () 
     assert.equal(projected.shellActions[1].command.includes("/tmp/O'\\''Neil/bin"), true);
     // #323: fish entry single-quotes the dir with the same POSIX literal
     // escaping (`'\''` is also a valid escaped quote in fish unquoted context).
-    assert.equal(projected.shellActions[2].command, "fish_add_path '/tmp/O'\\''Neil/bin'");
+    // #3118: `--` is fish's end-of-options separator, added so a leading-dash
+    // directory name is not misparsed as a flag; every fish_add_path lane carries it now.
+    assert.equal(projected.shellActions[2].command, "fish_add_path -- '/tmp/O'\\''Neil/bin'");
   });
 
   test('maybeSuggestPathExport renders commands projected by path-action seam', () => {
@@ -1598,3 +2651,391 @@ test('platformWriteSync survives a concurrent collision on the same target path'
 });
   });
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// #3118 — failing-first coverage for a path-export projection API that does
+// not exist yet in this module (projectPathExportLine, escapeCmdDoubleQuotedArgument).
+// These tests are EXPECTED TO FAIL until that API lands.
+// ────────────────────────────────────────────────────────────────────────
+
+describe('path export projection — escaping (#3118)', () => {
+  const laneCommand = (mode, targetDir, platform, shell) => {
+    const { shellActions } = projectPathActionProjection({ mode, targetDir, platform });
+    const a = shellActions.find((x) => x.shell === shell);
+    return a ? a.command : null;
+  };
+
+  // The fish lane is the ONE deliberate output change for ordinary paths: fish_add_path
+  // misparses a leading-dash directory name without the `--` end-of-options separator
+  // (#3118 review finding), so every path — hostile or ordinary — now gets `--` on the
+  // fish lane. Every other lane (posix export, zsh/bash echo, PowerShell, cmd) remains
+  // byte-identical for an ordinary path.
+  test('leaves an ordinary path unchanged on every lane except fish', () => {
+    const repairLinux = projectPathActionProjection({ mode: 'repair', targetDir: '/usr/local/bin', platform: 'linux' });
+    assert.deepEqual(repairLinux.shellActions, [
+      { label: null, shell: 'posix', command: 'export PATH="/usr/local/bin:$PATH"' },
+    ]);
+    assert.deepEqual(repairLinux.actionLines, [
+      'export PATH="/usr/local/bin:$PATH"',
+    ]);
+
+    const persistLinux = projectPathActionProjection({ mode: 'persist', targetDir: '/usr/local/bin', platform: 'linux' });
+    assert.deepEqual(persistLinux.shellActions, [
+      { label: 'zsh', shell: 'zsh', command: `echo 'export PATH="/usr/local/bin:$PATH"' >> ~/.zshrc` },
+      { label: 'bash', shell: 'bash', command: `echo 'export PATH="/usr/local/bin:$PATH"' >> ~/.bashrc` },
+      { label: 'fish', shell: 'fish', command: `fish_add_path -- '/usr/local/bin'` },
+    ]);
+    assert.deepEqual(persistLinux.actionLines, [
+      `zsh: echo 'export PATH="/usr/local/bin:$PATH"' >> ~/.zshrc`,
+      `bash: echo 'export PATH="/usr/local/bin:$PATH"' >> ~/.bashrc`,
+      `fish: fish_add_path -- '/usr/local/bin'`,
+    ]);
+
+    const repairWin32 = projectPathActionProjection({ mode: 'repair', targetDir: 'C:/Users/dev/bin', platform: 'win32' });
+    assert.deepEqual(repairWin32.shellActions, [
+      {
+        label: 'PowerShell',
+        shell: 'powershell',
+        command: `[Environment]::SetEnvironmentVariable('PATH', 'C:/Users/dev/bin;' + [Environment]::GetEnvironmentVariable('PATH', 'User'), 'User')`,
+      },
+      {
+        label: 'cmd.exe',
+        shell: 'cmd',
+        command: `powershell -Command "[Environment]::SetEnvironmentVariable('PATH', 'C:/Users/dev/bin;' + [Environment]::GetEnvironmentVariable('PATH', 'User'), 'User')"`,
+      },
+      {
+        label: 'Git Bash',
+        shell: 'bash',
+        command: `echo 'export PATH="C:/Users/dev/bin:$PATH"' >> ~/.bashrc`,
+      },
+    ]);
+  });
+
+  test('the fish lane gains the end-of-options separator for every path', () => {
+    const command = laneCommand('persist', '/usr/local/bin', 'linux', 'fish');
+    assert.equal(command, `fish_add_path -- '/usr/local/bin'`);
+  });
+
+  test('does not write a command substitution into the rc file', () => {
+    const { escapedDir } = projectPathExportLine('/tmp/a$(id)b');
+    assert.equal(escapedDir, '/tmp/a\\$(id)b');
+  });
+
+  test('does not write a backtick substitution into the rc file', () => {
+    const { escapedDir } = projectPathExportLine('/tmp/a`whoami`b');
+    assert.equal(escapedDir, '/tmp/a\\`whoami\\`b');
+  });
+
+  test('keeps the persisted rc line quote-balanced', () => {
+    const { escapedDir } = projectPathExportLine('/tmp/a"b');
+    assert.equal(escapedDir, '/tmp/a\\"b');
+  });
+
+  test('escapes a backslash in the persisted line', () => {
+    const { escapedDir } = projectPathExportLine('/tmp/a\\b');
+    assert.equal(escapedDir, '/tmp/a\\\\b');
+  });
+
+  // #3118 review finding (now fixed): the other four escapers' target contexts
+  // (PowerShell single-quoted, POSIX double-quoted, POSIX single-quoted, and the win32
+  // JSON.stringify-based hook token) all treat a raw newline/CR/NUL as literal data that
+  // stays inside the quoting/escaping without breaking out, so those four DO survive
+  // intact and are pinned exactly below. escapeTomlDoubleQuotedString is exercised
+  // separately below — it now escapes TOML's required control-character ranges rather
+  // than passing them through raw.
+  test('the escapers survive newlines and null bytes', () => {
+    const cases = [
+      ['\n', '\n', 'a\\nb'],
+      ['\r\n', '\r\n', 'a\\r\\nb'],
+      ['\0', '\0', 'a\\u0000b'],
+    ];
+    for (const [raw, , tomlExpected] of cases) {
+      const value = `a${raw}b`;
+      assert.equal(escapePowerShellSingleQuoted(value), `a${raw}b`);
+      assert.equal(escapePosixDoubleQuoted(value), `a${raw}b`);
+      assert.equal(escapeSingleQuotedShellLiteral(value), `a${raw}b`);
+      assert.equal(formatManagedHookScriptToken(value, { platform: 'win32' }), JSON.stringify(`a${raw}b`));
+      assert.equal(escapeTomlDoubleQuotedString(value), tomlExpected);
+    }
+  });
+
+  // TOML v1.0.0 basic-string grammar (https://toml.io/en/v1.0.0#string): a basic string
+  // must escape the quotation mark, backslash, and control characters other than tab
+  // (U+0000-U+0008, U+000A-U+001F, U+007F). Compact escapes (\b \t \n \f \r \" \\) are
+  // used where TOML defines them; every other required character falls back to \uXXXX.
+  // Tab (U+0009) is explicitly excluded from the "must escape" set, so it passes through
+  // unescaped. Exact expected outputs below were derived by running the built function
+  // (see dispatch report table).
+  test('escapes control characters to a parseable TOML basic string', () => {
+    assert.equal(escapeTomlDoubleQuotedString('\n'), '\\n');
+    assert.equal(escapeTomlDoubleQuotedString('\r'), '\\r');
+    assert.equal(escapeTomlDoubleQuotedString('\r\n'), '\\r\\n');
+    assert.equal(escapeTomlDoubleQuotedString('\0'), '\\u0000');
+    assert.equal(escapeTomlDoubleQuotedString('\t'), '\t');
+    assert.equal(escapeTomlDoubleQuotedString('\b'), '\\b');
+    assert.equal(escapeTomlDoubleQuotedString('\f'), '\\f');
+    assert.equal(escapeTomlDoubleQuotedString('\x1F'), '\\u001f');
+    assert.equal(escapeTomlDoubleQuotedString('\x7F'), '\\u007f');
+    // Ordering pin: backslash escaped FIRST (doubled), then quote, then control chars —
+    // so a backslash introduced by an earlier escape step is never re-escaped.
+    assert.equal(escapeTomlDoubleQuotedString('a\\b"c\nd'), 'a\\\\b\\"c\\nd');
+  });
+
+  test('leaves an ordinary value byte-identical', () => {
+    const value = 'C:/Users/dev/gsd.js';
+    assert.equal(escapeTomlDoubleQuotedString(value), value);
+  });
+
+  test('produces a TOML basic string that parses back to the original', () => {
+    // No built-in or dependency TOML parser is available in this environment (Node has
+    // no built-in TOML support, and neither `toml` nor `@iarna/toml` nor `smol-toml` is a
+    // project dependency), so this round-trips through a minimal inline unescape that
+    // implements only the escape forms escapeTomlDoubleQuotedString can produce
+    // (\\ \" \b \t \n \f \r \uXXXX) — sufficient to invert this encoder, not a general
+    // TOML parser.
+    const unescapeTomlBasicString = (escaped) => {
+      let out = '';
+      for (let i = 0; i < escaped.length; i += 1) {
+        const ch = escaped[i];
+        if (ch !== '\\') {
+          out += ch;
+          continue;
+        }
+        const next = escaped[i + 1];
+        if (next === 'u') {
+          out += String.fromCodePoint(parseInt(escaped.slice(i + 2, i + 6), 16));
+          i += 5;
+          continue;
+        }
+        const compact = { b: '\b', t: '\t', n: '\n', f: '\f', r: '\r', '"': '"', '\\': '\\' }[next];
+        if (compact === undefined) throw new Error(`unsupported escape: \\${next}`);
+        out += compact;
+        i += 1;
+      }
+      return out;
+    };
+
+    const hostileInputs = ['\n', '\r', '\r\n', '\0', '\t', '\b', '\f', '\x1F', '\x7F', 'a\\b"c\nd'];
+    for (const input of hostileInputs) {
+      const escaped = escapeTomlDoubleQuotedString(input);
+      const tomlLine = `k = "${escaped}"`;
+      const quoted = tomlLine.slice(tomlLine.indexOf('"') + 1, tomlLine.lastIndexOf('"'));
+      assert.equal(unescapeTomlBasicString(quoted), input, `round-trip failed for ${JSON.stringify(input)}`);
+    }
+  });
+
+  // A newline in the target directory lands inside a single-quoted `echo '...'` argument
+  // in the persisted bash/zsh rc lines. POSIX single quotes preserve a literal newline as
+  // data — they do NOT terminate on a bare newline — so the whole `echo '...' >> ~/.bashrc`
+  // stays ONE shell command; the newline just makes the persisted PATH assignment a broken,
+  // two-line value inside .bashrc, not a second executable command. (Contrast: had the
+  // value been embedded unquoted or inside double quotes followed by an unescaped command
+  // separator, a newline COULD start a new command — that is not the case here.)
+  test('a newline in the target directory cannot start a new rc-file command', () => {
+    const command = laneCommand('persist', '/tmp/a\nmalicious', 'linux', 'bash');
+    assert.equal(command, `echo 'export PATH="/tmp/a\nmalicious:$PATH"' >> ~/.bashrc`);
+    // The newline sits between the opening and closing `'` of the echo argument — it is
+    // literal data inside one quoted token, not a shell command terminator.
+    const singleQuoteSpan = command.slice(command.indexOf(`'`) + 1, command.lastIndexOf(`'`));
+    assert.ok(singleQuoteSpan.includes('\n'), 'the newline must be inside the single-quoted region');
+  });
+
+  test('keeps the existing apostrophe escaping', () => {
+    const command = laneCommand('persist', "/tmp/o'brien", 'linux', 'bash');
+    assert.ok(command.includes(`'\\''`), 'bash lane must retain the POSIX single-quote escape sequence');
+  });
+
+  test('escapes an apostrophe and a dollar in one path', () => {
+    const command = laneCommand('persist', "/tmp/o'b$(id)", 'linux', 'bash');
+    assert.ok(command.includes(`'\\''`), 'must still contain the POSIX single-quote escape');
+    assert.ok(command.includes('\\$('), 'must also contain the escaped dollar-paren');
+  });
+
+  test('all three lanes escape the export line identically', () => {
+    const { escapedDir: token } = projectPathExportLine('/tmp/a$(id)b');
+    const repairCommand = laneCommand('repair', '/tmp/a$(id)b', 'linux', 'posix');
+    const persistCommand = laneCommand('persist', '/tmp/a$(id)b', 'linux', 'bash');
+    const win32TargetDir = 'C:/a$(id)b';
+    const win32Command = laneCommand('repair', win32TargetDir, 'win32', 'bash');
+    // #3118: the win32 bash lane posix-normalizes targetDir before escaping it, so its token
+    // must be compared against the SAME (posix-normalized) input, not against the '/tmp/...'
+    // token above — those are two different inputs and legitimately escape differently.
+    const { escapedDir: win32Token } = projectPathExportLine(posixNormalize(win32TargetDir));
+    assert.ok(repairCommand.includes(token), 'repair posix lane must use the same escaped token');
+    assert.ok(persistCommand.includes(token), 'persist bash lane must use the same escaped token');
+    assert.ok(win32Command.includes(win32Token), 'win32 bash lane must use the same escaped token');
+  });
+
+  test('does not let a quote break out of the cmd lane', () => {
+    const { shellActions, actionLines } = projectPathActionProjection({
+      mode: 'repair',
+      targetDir: 'C:/a"&calc&"b',
+      platform: 'win32',
+    });
+    // `"` is a reserved character that cannot appear in any Windows path, so
+    // there is no valid command to suggest; the projection fails closed
+    // rather than emitting a cmd line whose quoting can be broken.
+    assert.deepEqual(shellActions, []);
+    assert.deepEqual(actionLines, []);
+  });
+
+  test('still projects win32 lanes for a legal path', () => {
+    const { shellActions } = projectPathActionProjection({
+      mode: 'repair',
+      targetDir: 'C:/Users/dev/bin',
+      platform: 'win32',
+    });
+    assert.equal(shellActions.length, 3);
+    assert.deepEqual(shellActions.map((a) => a.shell), ['powershell', 'cmd', 'bash']);
+  });
+
+  test('keeps the PowerShell doubling', () => {
+    assert.equal(escapePowerShellSingleQuoted("o'brien"), "o''brien");
+  });
+
+  test('an absent target directory produces no actions', () => {
+    for (const targetDir of [null, undefined, '']) {
+      assert.deepEqual(
+        projectPathActionProjection({ mode: 'repair', targetDir, platform: 'linux' }),
+        { shellActions: [], actionLines: [], reason: PATH_ACTION_REASON.NO_TARGET_DIR },
+      );
+    }
+  });
+
+  test('reports why a win32 quote produced no actions', () => {
+    const result = projectPathActionProjection({ mode: 'repair', targetDir: 'C:/a"b', platform: 'win32' });
+    assert.deepEqual(result.shellActions, []);
+    assert.equal(result.reason, PATH_ACTION_REASON.WIN32_RESERVED_QUOTE);
+  });
+
+  // Two empty results with different causes must stay distinguishable — that
+  // is the whole subject of epic #3051.
+  test('reports a missing target directory as a different cause', () => {
+    const result = projectPathActionProjection({ mode: 'repair', targetDir: null, platform: 'win32' });
+    assert.equal(result.reason, PATH_ACTION_REASON.NO_TARGET_DIR);
+  });
+
+  test('a successful projection carries no reason', () => {
+    const result = projectPathActionProjection({ mode: 'repair', targetDir: '/usr/local/bin', platform: 'linux' });
+    assert.equal(Object.prototype.hasOwnProperty.call(result, 'reason'), false);
+  });
+
+  test('the reason vocabulary is closed', () => {
+    assert.deepEqual(Object.keys(PATH_ACTION_REASON).sort(), ['NO_TARGET_DIR', 'WIN32_RESERVED_QUOTE']);
+    assert.ok(Object.isFrozen(PATH_ACTION_REASON));
+  });
+
+  test('leaves the fish lane escaping unchanged', () => {
+    const command = laneCommand('persist', '/tmp/a$(id)b', 'linux', 'fish');
+    assert.equal(command, `fish_add_path -- '/tmp/a$(id)b'`);
+  });
+
+  test('emits the fish end-of-options separator for an ordinary path', () => {
+    // #3118 review MINOR: a leading-dash `targetDir` (e.g. `-v`) is a legal
+    // directory name, but fish's argparse-based option scanning misparses an
+    // unseparated leading-dash token as a flag regardless of quoting —
+    // verified empirically against a real fish 4.8.1 install that
+    // `fish_add_path '-v'` fails ("No paths to add, not setting anything.")
+    // while `fish_add_path -- '-v'` succeeds. `--` is fish's standard
+    // end-of-options separator and is a no-op for ordinary paths.
+    const command = laneCommand('persist', '/tmp/x', 'linux', 'fish');
+    assert.equal(command, `fish_add_path -- '/tmp/x'`);
+  });
+
+  test('an empty platform string falls back to the host', () => {
+    assert.equal(
+      formatManagedHookScriptToken('/x/y.js', { platform: '' }),
+      formatManagedHookScriptToken('/x/y.js'),
+    );
+  });
+
+  test('projects no token off win32', () => {
+    assert.equal(formatManagedHookScriptToken('/x/y.js', { platform: 'linux' }), null);
+  });
+
+  test('projects a JSON-quoted posix-normalized token on win32', () => {
+    assert.equal(
+      formatManagedHookScriptToken('C:\\x\\y.js', { platform: 'win32' }),
+      JSON.stringify('C:/x/y.js'),
+    );
+  });
+
+  test('returns no lines when called with no arguments', () => {
+    assert.deepEqual(renderShellActionLines(), []);
+  });
+
+  test('drops entries without a command', () => {
+    assert.deepEqual(
+      renderShellActionLines([null, { label: 'a' }, { label: 'b', command: 'c' }]),
+      ['b: c'],
+    );
+  });
+
+  test('renders an unlabeled action as the bare command', () => {
+    assert.deepEqual(renderShellActionLines([{ label: null, command: 'x' }]), ['x']);
+  });
+
+  test('escapes a backslash-quote pair in the right order', () => {
+    // Input: a \ " b  (a literal backslash immediately followed by a quote).
+    const input = ['a', '\\', '"', 'b'].join('');
+    // Expected: backslash first doubles to two backslashes, THEN the quote
+    // gets its own backslash — so the quote ends up preceded by 3 backslashes.
+    const expected = ['a', '\\', '\\', '\\', '"', 'b'].join('');
+    assert.equal(escapeTomlDoubleQuotedString(input), expected);
+  });
+
+  test('coerces non-string values', () => {
+    const escapers = [
+      escapeTomlDoubleQuotedString,
+      escapePowerShellSingleQuoted,
+      escapePosixDoubleQuoted,
+      escapeSingleQuotedShellLiteral,
+    ];
+    for (const escaper of escapers) {
+      for (const value of [null, undefined, 0, [], {}]) {
+        assert.doesNotThrow(() => escaper(value));
+        assert.equal(typeof escaper(value), 'string');
+      }
+    }
+  });
+
+  test('returns empty for an empty value', () => {
+    const escapers = [
+      escapeTomlDoubleQuotedString,
+      escapePowerShellSingleQuoted,
+      escapePosixDoubleQuoted,
+      escapeSingleQuotedShellLiteral,
+    ];
+    for (const escaper of escapers) {
+      assert.equal(escaper(''), '');
+    }
+  });
+
+  describe('retryRenameSync (#3118)', () => {
+    afterEach(() => {
+      mock.restoreAll();
+    });
+
+    test('rethrows when the rename cannot be retried to success', () => {
+      mock.method(fs, 'renameSync', () => {
+        const e = new Error('EPERM');
+        e.code = 'EPERM';
+        throw e;
+      });
+      assert.throws(() => retryRenameSync('/a', '/b'));
+    });
+
+    test('returns silently on a successful rename', (t) => {
+      const dir = createTempDir('gsd-3118-rename-');
+      t.after(() => cleanup(dir));
+      const from = path.join(dir, 'source.txt');
+      const to = path.join(dir, 'dest.txt');
+      fs.writeFileSync(from, 'content');
+
+      retryRenameSync(from, to);
+
+      assert.ok(fs.statSync(to).isFile());
+      assert.equal(fs.existsSync(from), false);
+    });
+  });
+});

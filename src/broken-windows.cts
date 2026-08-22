@@ -1,10 +1,10 @@
 /**
- * Broken-windows ledger — enforced cross-phase defect register (issue #1950).
+ * Broken-windows ledger — optionally enforced cross-phase defect register (issue #1950).
  *
  * Manages `.planning/WINDOWS.md`: a cross-phase ledger of small defects (stubs,
  * TODOs, skipped tests, lint warnings, unrun verifies, unmet truths, deviations).
- * `/gsd-ship` blocks while any entry is `open`; an entry can be `waived` only
- * with a recorded reason or `fixed`.
+ * When `workflow.windows_enforce` is true, `/gsd-ship` blocks while any entry is
+ * `open`; an entry can be `waived` only with a recorded reason or `fixed`.
  *
  * LEAF MODULE — imports ONLY: node:fs, node:path. No other src/ imports.
  *
@@ -19,9 +19,9 @@
  *   ---
  *   # Broken Windows Ledger
  *   <human-readable prose>
- *   ```json
+ *   ````json
  *   [ <entries array, canonical JSON> ]
- *   ```
+ *   ````
  *
  * Frontmatter holds scalar counts (the FAST path the ship gate reads via jq
  * without parsing JSON). The JSON code block is the AUTHORITATIVE entries
@@ -379,6 +379,84 @@ const JSON_FENCE_OPEN = '````json';
 const JSON_FENCE_CLOSE = '````';
 const FORBIDDEN_BACKTICK_RUN = '````';
 
+// Reader-side fence tolerance (#3657): CommonMark formatters (Prettier et al.)
+// normalize the written 4-backtick fence down to the shortest legal width (3)
+// whenever the block body holds no backtick run — and a canonical-JSON ledger
+// body never does. Both widths are valid CommonMark, so the reader locates the
+// block by a line-anchored 3+ fence and closes on a run at least as wide as
+// the opening one (CommonMark: a shorter run does not close). The writer above
+// is unchanged — 4 backticks stay what renderLedger emits (#1950 review H1).
+
+type JsonBlockSpan = { bodyStart: number; bodyEnd: number; afterClose: number };
+type JsonBlockLookup =
+  | { ok: true; span: JsonBlockSpan }
+  | { ok: false; reason: 'missing-open' | 'unterminated' };
+
+/**
+ * Locate the entries JSON block by CommonMark fence rules rather than a fixed
+ * literal width. Both parseJsonBlock (strict) and writeLedgerAtomic's #2893
+ * prose preservation (lenient) go through this one function so read tolerance
+ * and splice tolerance cannot drift (#3657). A backtick-only line can never
+ * occur inside a body: JSON.stringify renders strings single-line-escaped, so
+ * an inline run inside a description is never a close-fence candidate.
+ *
+ * Disambiguation (#3657 security review): an entry description may contain
+ * newlines and 3-backtick runs (append validation rejects only 4+ runs), and
+ * renderTable renders descriptions into the prose ABOVE the JSON block — so
+ * hostile or accidental text can plant a second json fence above the real
+ * one. renderLedger always emits the entries block as the FINAL fenced
+ * section, so spans are scanned in REVERSE: prefer the latest span whose
+ * entries length equals the frontmatter total_count (the real block always
+ * satisfies it — parseLedger cross-checks that invariant), else the latest
+ * span whose body is a JSON array, else the first span so corrupt bodies keep
+ * their fail-closed parse errors. A mirror planted below with identical
+ * length and identical entries is indistinguishable by construction — and
+ * harmless.
+ */
+function locateJsonBlock(raw: string, expectedTotal?: number): JsonBlockLookup {
+  const spans: JsonBlockSpan[] = [];
+  for (const open of raw.matchAll(/^(`{3,})json[ \t]*\r?$/gm)) {
+    const width = open[1].length;
+    const bodyStart = (open.index ?? 0) + open[0].length;
+    for (const close of raw.slice(bodyStart).matchAll(/^(`{3,})[ \t]*\r?$/gm)) {
+      if (close[1].length < width) continue;
+      const bodyEnd = bodyStart + (close.index ?? 0);
+      const closeLineEnd = raw.indexOf('\n', bodyEnd);
+      spans.push({
+        bodyStart,
+        bodyEnd,
+        afterClose: closeLineEnd === -1 ? raw.length : closeLineEnd + 1,
+      });
+      break; // CommonMark: the first qualifying close ends this fence block
+    }
+  }
+  if (spans.length === 0) {
+    const sawOpen = /^(`{3,})json[ \t]*\r?$/m.test(raw);
+    return { ok: false, reason: sawOpen ? 'unterminated' : 'missing-open' };
+  }
+  const parseBody = (s: JsonBlockSpan): unknown => {
+    try {
+      return JSON.parse(raw.slice(s.bodyStart, s.bodyEnd).trim());
+    } catch {
+      return undefined;
+    }
+  };
+  if (expectedTotal !== undefined) {
+    for (let i = spans.length - 1; i >= 0; i--) {
+      const body = parseBody(spans[i]);
+      if (Array.isArray(body) && body.length === expectedTotal) {
+        return { ok: true, span: spans[i] };
+      }
+    }
+  }
+  for (let i = spans.length - 1; i >= 0; i--) {
+    if (Array.isArray(parseBody(spans[i]))) {
+      return { ok: true, span: spans[i] };
+    }
+  }
+  return { ok: true, span: spans[0] };
+}
+
 /**
  * Minimal strict frontmatter parser for flat scalar keys. Only supports the
  * shape this module emits: `key: <number|string>` per line. Throws on any
@@ -401,7 +479,12 @@ function parseFrontmatterStrict(raw: string): Record<string, number | string> {
   }
   const yamlBody = raw.slice(headerEnd, closeIdx);
   const out: Record<string, number | string> = {};
-  for (const line of yamlBody.split(/\r?\n/)) {
+  for (const rawLine of yamlBody.split(/\r?\n/)) {
+    // #3116: the `\n---` scan leaves the final line's CR attached on a CRLF
+    // ledger, and `.` never matches CR, so the key: value regex below fails on
+    // it. Strip the trailing CR per line so the rest of `raw` (which
+    // parseJsonBlock also slices by byte offset) is unaffected.
+    const line = rawLine.replace(/\r$/, '');
     if (line.trim() === '') continue;
     const m = line.match(/^([a-zA-Z0-9_]+):\s*(.*)$/);
     if (!m) {
@@ -428,22 +511,17 @@ function parseFrontmatterStrict(raw: string): Record<string, number | string> {
   return out;
 }
 
-function parseJsonBlock(raw: string): WindowEntry[] {
-  const start = raw.indexOf(JSON_FENCE_OPEN);
-  if (start === -1) {
+function parseJsonBlock(raw: string, expectedTotal?: number): WindowEntry[] {
+  const span = locateJsonBlock(raw, expectedTotal);
+  if (!span.ok) {
     throw new WindowsError(
       REASON.WINDOWS_LEDGER_MALFORMED,
-      'Ledger missing JSON code block for entries.',
+      span.reason === 'missing-open'
+        ? 'Ledger missing JSON code block for entries.'
+        : 'Ledger JSON code block not terminated.',
     );
   }
-  const end = raw.indexOf(JSON_FENCE_CLOSE, start + JSON_FENCE_OPEN.length);
-  if (end === -1) {
-    throw new WindowsError(
-      REASON.WINDOWS_LEDGER_MALFORMED,
-      'Ledger JSON code block not terminated.',
-    );
-  }
-  const jsonText = raw.slice(start + JSON_FENCE_OPEN.length, end).trim();
+  const jsonText = raw.slice(span.span.bodyStart, span.span.bodyEnd).trim();
   let parsed: unknown;
   try {
     parsed = JSON.parse(jsonText);
@@ -551,7 +629,7 @@ export function parseLedger(raw: string): Ledger {
     );
   }
 
-  const entries = parseJsonBlock(raw);
+  const entries = parseJsonBlock(raw, typeof fm.total_count === 'number' ? fm.total_count : undefined);
   const ledger: Ledger = {
     schema_version: SCHEMA_VERSION,
     open_count: typeof fm.open_count === 'number' ? fm.open_count : 0,
@@ -596,7 +674,7 @@ export function renderLedger(ledger: Ledger): string {
   const header = [
     '# Broken Windows Ledger',
     '',
-    '> Cross-phase defect register. `/gsd-ship` blocks while `open_count > 0`.',
+    '> Cross-phase defect register. With `workflow.windows_enforce` enabled, `/gsd-ship` blocks while `open_count > 0`.',
     '> Waive with `gsd-tools windows waive <id> "<reason>"` (reason required).',
     '> Mark fixed with `gsd-tools windows fixed <id>`.',
     '',
@@ -729,17 +807,16 @@ function writeLedgerAtomic(cwd: string, ledger: Ledger): void {
   let trailingProse = '';
   try {
     const existing = fs.readFileSync(p, 'utf8');
-    // #2893: search for the CLOSING fence starting AFTER the opening fence,
-    // mirroring parseJsonBlock — indexOf(JSON_FENCE_CLOSE) alone would match
-    // the opening fence ('````json' starts with '````').
-    const openIdx = existing.indexOf(JSON_FENCE_OPEN);
-    if (openIdx !== -1) {
-      const fenceEnd = existing.indexOf(JSON_FENCE_CLOSE, openIdx + JSON_FENCE_OPEN.length);
-      if (fenceEnd !== -1) {
-        const afterFence = existing.slice(fenceEnd + JSON_FENCE_CLOSE.length);
-        // Drop leading newlines; keep the rest as prose.
-        trailingProse = afterFence.replace(/^\n+/, '');
-      }
+    // #2893: search for the CLOSING fence starting AFTER the opening fence.
+    // The span is located with the same tolerant + disambiguated fence rules
+    // parseJsonBlock uses (#3657), so a formatter-normalized 3-backtick ledger
+    // keeps its prose too — a literal-width search here would find no block
+    // and silently drop everything below the ledger on the next write.
+    const span = locateJsonBlock(existing, ledger.total_count);
+    if (span.ok) {
+      const afterFence = existing.slice(span.span.afterClose);
+      // Drop leading newlines; keep the rest as prose.
+      trailingProse = afterFence.replace(/^(?:\r?\n)+/, '');
     }
   } catch {
     // File doesn't exist yet (first write) — no prose to preserve.

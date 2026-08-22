@@ -185,7 +185,7 @@ GSD 워크스페이스 관리 — 리포지토리 복사본과 독립적인 `.pl
 - `--view` 사용: 기존 RESEARCH.md를 stdout으로 출력, 생성 없음. RESEARCH.md가 없으면 오류 발생.
 
 **패키지 적법성 게이트 (v1.42.1):**
-리서처가 외부 패키지를 추천하면 각 패키지에 대해 `slopcheck install <pkg> --json`을 실행하고 레지스트리, 출시일, 다운로드 수, 소스 리포지토리, slopcheck 판정이 담긴 `## Package Legitimacy Audit` 테이블을 RESEARCH.md에 작성합니다. 판정:
+리서처가 외부 패키지를 추천하면 각 패키지에 대해 `gsd-tools query package-legitimacy check --ecosystem <npm|pypi|crates> <pkg>`을 실행하고 레지스트리, 출시일, 다운로드 수, 소스 리포지토리, 적법성 판정이 담긴 `## Package Legitimacy Audit` 테이블을 RESEARCH.md에 작성합니다. 판정:
 
 - `[SLOP]` — 패키지가 RESEARCH.md에서 완전히 제거; 계획자에게 전달되지 않음
 - `[SUS]` — 패키지 플래그 지정; 계획자가 설치 작업 전에 `checkpoint:human-verify` 삽입
@@ -820,6 +820,8 @@ GSD 보장을 통해 애드혹 작업을 실행합니다.
 /gsd-health --context               # 컨텍스트 활용 트리아지
 ```
 
+**범위 간 설치 섀도잉(`W028`).** 런타임이 `global`과 `local` 두 범위 모두에 설치되어 있고, 호스트의 트리거 해석 규칙으로 인해 한 범위의 `/gsd-*` 표면에 도달할 수 없게 되는 경우 — Claude Code의 사례: 개인 스킬이 항상 프로젝트 명령을 이깁니다 — 상태 점검은 섀도잉된 트리거, 승리한 범위, 패배한 범위를 명시하는 WARNING 심각도 권고를 추가합니다. 이는 상태 점검의 통과/실패 상태를 절대 변경하지 않으며, 자동으로 수정되지도 않습니다(제거해야 할 단 하나의 올바른 범위가 존재하지 않기 때문입니다). 따라서 `--repair`는 이를 절대 건드리지 않습니다. 설치 시점에 GSD Core가 출력하는 것과 동일한 권고입니다.
+
 ### `/gsd-cleanup`
 
 완료된 마일스톤에서 누적된 단계 디렉토리를 아카이브하고 업스트림이 삭제된 로컬 브랜치를 정리합니다.
@@ -1167,7 +1169,7 @@ AI 시스템 구축을 포함하는 단계에 대한 AI-SPEC.md 디자인 계약
 | 인수 | 필수 | 설명 |
 |----------|----------|-------------|
 | `N` | **예** | 검토할 변경사항이 있는 단계 번호 (예: `2` 또는 `02`) |
-| `--depth=quick\|standard\|deep` | 아니요 | 검토 깊이 수준 (`workflow.code_review_depth` 설정 재정의). `quick`: 패턴 매칭만 (~2분). `standard`: 언어별 검사를 통한 파일별 분석 (~5–15분, 기본값). `deep`: 임포트 그래프와 호출 체인을 포함한 크로스 파일 분석 (~15–30분) |
+| `--depth=quick\|standard\|deep` | 아니요 | 검토 깊이 수준. `workflow.code_review_depth`와 일치하는 `workflow.code_review_depth_overrides` 경로 규칙을 모두 재정의합니다 — 플래그가 항상 우선합니다. `quick`: 패턴 매칭만 (~2분). `standard`: 언어별 검사를 통한 파일별 분석 (~5–15분, 기본값). `deep`: 임포트 그래프와 호출 체인을 포함한 크로스 파일 분석 (~15–30분) |
 | `--files file1,file2,...` | 아니요 | 명시적 쉼표 구분 파일 목록; SUMMARY/git 범위 지정을 완전히 건너뜀 |
 | `--fix` | 아니요 | 검토 후 자동 문제 수정 — REVIEW.md를 읽고, 수정자 에이전트를 생성하고, 각 수정을 원자적으로 커밋 |
 | `--fix --all` | 아니요 | 수정 범위에 Info 결과 포함 (기본값: Critical + Warning만) |

@@ -182,6 +182,11 @@
   - [External-Job Capability](#155-external-job-capability)
   - [API-Coverage Gate](#156-api-coverage-gate)
   - [State Rebuild & Configurable Graph Path](#157-state-rebuild--configurable-graph-path)
+  - [Broken-Windows Ledger](#158-broken-windows-ledger)
+  - [Complexity-Triggered Refactor](#159-complexity-triggered-refactor)
+  - [Archive Quick Tasks at Milestone Close](#160-archive-quick-tasks-at-milestone-close)
+  - [Verify-Command Path Grounding](#161-verify-command-path-grounding)
+  - [Statusline STATE.md Freshness Marker](#162-statusline-statemd-freshness-marker)
 
 ---
 
@@ -270,20 +275,21 @@
 **Requirements:**
 - REQ-UI-01: System MUST detect existing design system state (shadcn components.json, Tailwind config, tokens)
 - REQ-UI-02: System MUST ask only unanswered design contract questions
-- REQ-UI-03: System MUST validate against 6 dimensions (Copywriting, Visuals, Color, Typography, Spacing, Registry Safety)
+- REQ-UI-03: System MUST validate against 7 dimensions (Copywriting, Visuals, Color, Typography, Spacing, Registry Safety, Inventory Provenance)
 - REQ-UI-04: System MUST enter revision loop if validation returns BLOCKED (max 2 iterations)
 - REQ-UI-05: System MUST offer shadcn initialization for React/Next.js/Vite projects without `components.json`
 - REQ-UI-06: System MUST enforce registry safety gate for third-party shadcn registries
 
 **Produces:** `{padded_phase}-UI-SPEC.md` — Design contract consumed by executors
 
-**6 Validation Dimensions:**
+**7 Validation Dimensions:**
 1. **Copywriting** — CTA labels, empty states, error messages
 2. **Visuals** — Focal points, visual hierarchy, icon accessibility
 3. **Color** — Accent usage discipline, 60/30/10 compliance
 4. **Typography** — Font size/weight constraint adherence
 5. **Spacing** — Grid alignment, token consistency
 6. **Registry Safety** — Third-party component inspection requirements
+7. **Inventory Provenance** — Component inventory enumerated from the installed design system, not recalled
 
 **shadcn Integration:**
 - Detects missing `components.json` in React/Next.js/Vite projects
@@ -487,6 +493,7 @@
 - REQ-PHASE-03: Remove MUST renumber all subsequent phases
 - REQ-PHASE-04: Remove MUST prevent removing phases that have been executed
 - REQ-PHASE-05: All operations MUST update ROADMAP.md and create/remove phase directories
+- REQ-PHASE-06: Bare-number phase lookup MUST resolve digit-leading slug names consistently across phase verbs, preserve project-code-prefixed result shaping, and fail loudly when multiple directories match
 
 ---
 
@@ -643,7 +650,7 @@
 
 ### 19. Health Validation
 
-**Command:** `/gsd-health [--repair]`
+**Command:** `/gsd-health [--repair] [--backfill]`
 
 **Purpose:** Validate `.planning/` directory integrity and auto-repair issues.
 
@@ -652,7 +659,8 @@
 - REQ-HEALTH-02: System MUST validate configuration consistency
 - REQ-HEALTH-03: System MUST detect orphaned plans without summaries
 - REQ-HEALTH-04: System MUST check phase numbering and roadmap sync
-- REQ-HEALTH-05: `--repair` flag MUST auto-fix recoverable issues
+- REQ-HEALTH-05: `--repair` flag MUST auto-fix recoverable issues except DESTRUCTIVE-risk ones, which it MUST report but never auto-apply
+- REQ-HEALTH-06: `--backfill` flag MUST synthesize missing MILESTONES.md entries from archived milestone snapshots
 
 ---
 
@@ -969,7 +977,7 @@ continues. Drift detection cannot fail verification.
 | `granularity` | enum | `standard` | `coarse`, `standard`, or `fine` |
 | `model_profile` | enum | `balanced` | `quality`, `balanced`, `budget`, or `inherit` |
 | `models.<phase_type>` | enum | (none) | Per-phase-type tier override (`planning`, `discuss`, `research`, `execution`, `verification`, `completion`). Values: `opus`, `sonnet`, `haiku`, `inherit`. Coarse phase-level tuning that wins over `model_profile` but loses to per-agent `model_overrides`. See [CONFIGURATION.md](CONFIGURATION.md#per-phase-type-models-models--added-in-v140). Added in v1.40 |
-| `granularities.<phase_type>` | enum | (none) | Per-phase-type granularity override (`planning`, `discuss`, `research`, `execution`, `verification`, `completion`). Values: `coarse`, `standard`, `fine`. Mirrors `models.<phase_type>` for granularity. See [CONFIGURATION.md](CONFIGURATION.md#core-settings). Added in v1.43 ([#68](https://github.com/open-gsd/gsd-core/issues/68)). `/gsd:plan-phase --granularity <coarse\|standard\|fine>` overrides all config-based granularity for a single invocation (takes precedence over `granularities.planning`, top-level `granularity`, and `planning.granularity`). ([#703](https://github.com/open-gsd/gsd-core/issues/703)) |
+| `granularities.<phase_type>` | enum | (none) | Per-phase-type granularity override (`planning`, `discuss`, `research`, `execution`, `verification`, `completion`). Values: `coarse`, `standard`, `fine`. Mirrors `models.<phase_type>` for granularity. See [CONFIGURATION.md](CONFIGURATION.md#core-settings). Added in v1.43 ([#68](https://github.com/open-gsd/gsd-core/issues/68)). `/gsd-plan-phase --granularity <coarse\|standard\|fine>` overrides all config-based granularity for a single invocation (takes precedence over `granularities.planning`, top-level `granularity`, and `planning.granularity`). ([#703](https://github.com/open-gsd/gsd-core/issues/703)) |
 | `dynamic_routing.enabled` | boolean | `false` | Master switch for failure-tier escalation. When `true`, agents resolve to `tier_models[default_tier]` and escalate one tier on orchestrator-detected soft failure. Capped by `max_escalations`. See [CONFIGURATION.md](CONFIGURATION.md#dynamic-routing-with-failure-tier-escalation-dynamic_routing--added-in-v140). Added in v1.40 |
 | `workflow.research` | boolean | `true` | Domain research before planning |
 | `workflow.plan_check` | boolean | `true` | Plan verification loop |
@@ -1265,6 +1273,12 @@ Each reviewer is a **declared lane**: its binary, prompt and output channels, ti
 - Use `--all` for a full pre-merge sweep without changing project defaults.
 - For local model servers with small context windows, set `review.max_prompt_tokens_per_reviewer` to auto-trim prompts per reviewer — see [Prompt budgets for small-context reviewers](../docs/CONFIGURATION.md#prompt-budgets-for-small-context-reviewers) in CONFIGURATION.md.
 
+**Why record which model produced a review (#2295):** `reviewers:` in the frontmatter recorded which CLIs ran, but not which model each one resolved to. Without a pin, the model is whatever the CLI's own config or internal default happens to pick, so a "Codex vs Antigravity" comparison could quietly be a frontier model against a cheap-tier default with nothing in the record to say so — and a CLI update, or an unrelated config edit, could silently make past and future reviews incomparable.
+
+The fix records the model *and its provenance*. Provenance is what makes the value trustworthy: `pinned` (from `review.models.<slug>`) is certain, while `banner` and `transcript` are recovered from third-party CLI output this project does not own — a startup banner or an undocumented session log.
+
+That third-party dependence is a real trade-off, held honestly rather than papered over: the `banner` and `transcript` arms read formats GSD does not control, so they are best-effort by design and degrade to `unknown` rather than guessing or failing the run. A recorded `unknown` is a real answer — a wrong model name attributed to a review would be worse than none.
+
 ---
 
 ### 43. Backlog Parking Lot
@@ -1317,6 +1331,14 @@ Each reviewer is a **declared lane**: its binary, prompt and output channels, ti
 - REQ-PRBRANCH-01: System MUST identify commits that only modify `.planning/` files
 - REQ-PRBRANCH-02: System MUST create a new branch with planning commits filtered out
 - REQ-PRBRANCH-03: Code changes MUST be preserved exactly as committed
+- REQ-PRBRANCH-04: System MUST NOT delete a `.planning/` path the target branch already tracks
+- REQ-PRBRANCH-05: Verification MUST assert against the active filter mode's contract, not an unconditional zero
+
+**Filter modes.** `planning.pr_strict` selects what "filtered" means. The default mode treats `.planning/` as two populations: structural state that belongs in review (`STATE.md`, `ROADMAP.md`, `MILESTONES.md`, `PROJECT.md`, `REQUIREMENTS.md`, `milestones/**`) and transient per-phase artifacts that do not (`phases/`, `quick/`, `research/`, `threads/`, `todos/`, `debug/`, `seeds/`, `codebase/`, `ui-reviews/`). Strict mode collapses that distinction: nothing under `.planning/` reaches the PR branch, and a commit is carried over only when it touches at least one file outside `.planning/`.
+
+Strict mode exists because the two ways to keep planning private are not equivalent. Turning off `planning.commit_docs` keeps `.planning/` out of git, which also takes parallel executor worktrees with it — a worktree is checked out from a commit, so an untracked planning tree is simply absent inside it and the executor has no `PLAN.md` to read. Strict mode leaves planning committed, so worktrees and revert paths keep working, and moves the guarantee to the publication boundary instead. See [Publish PRs without planning artifacts](how-to/publish-prs-without-planning-artifacts.md).
+
+Both modes filter by forcing the excluded paths back to whatever the target branch already tracks, in the index *and* the working tree. Un-staging alone would record a deletion of any planning file the target branch carries, and would leave the picked file untracked on disk, where it makes a later cherry-pick of the same path abort.
 
 ---
 
@@ -2208,6 +2230,15 @@ Test suite that scans all agent, workflow, and command files for embedded inject
 |---------|------|---------|-------------|
 | `workflow.code_review` | boolean | `true` | Enable code review commands |
 | `workflow.code_review_depth` | string | `standard` | Default review depth: `quick`, `standard`, or `deep` |
+| `workflow.code_review_depth_overrides` | array | `[]` | Ordered `{ paths, depth }` rules that escalate depth for directories matched by path prefix against the changed-file set (#2554). See below. |
+
+**Path-scoped code review depth overrides**
+
+`workflow.code_review_depth_overrides` matches rules against the review's changed-file set by whole-segment directory-path prefix — `src/auth` matches `src/auth/token.ts` and `src/auth` itself, never `src/authfoo/x.ts` or `docs/src/auth/x.ts` — and is case-sensitive, following git.
+
+Escalation is **whole-review, not per-file**: depth is a single scalar handed to the reviewer agent, not a per-file setting, so the strongest matching tier across the whole rule set applies to every file in the review — a sensitive file is never reviewed shallowly because it shared a review with an unrelated one.
+
+v1 supports **directory-prefix matching only, not glob syntax**: no glob engine (`minimatch`, `picomatch`, `fast-glob`) exists in this project and none was added for this feature. A path containing `*` or `?` (e.g. `src/auth/**`) is a configuration error rather than a silent near-miss, because accepting it as sugar for a prefix would make unsupported patterns look armed when they match nothing. Every use case in the issue is expressible as a directory prefix. See [Scope code review depth by path](how-to/scope-code-review-depth-by-path.md) for the resolution order, error table, and a worked example.
 
 ---
 
@@ -2222,6 +2253,7 @@ Test suite that scans all agent, workflow, and command files for embedded inject
 - REQ-EXPLORE-02: Session MUST offer to route outputs to the appropriate GSD artifact
 - REQ-EXPLORE-03: An optional topic argument MUST prime the first question
 - REQ-EXPLORE-04: Exploration MUST optionally spawn a research agent for technical feasibility
+- REQ-EXPLORE-05: A research pass MUST disposition each surfaced claim (admit / refute / abstain) and route every abstention to a visible Unresolved Ledger — never smoothing an ungrounded claim into the narrative as confident prose
 
 ---
 
@@ -2687,7 +2719,7 @@ Users who run a memory / knowledge-base MCP server (for example, ExoCortex-style
   - `/gsd-config` — folds settings-advanced (`--advanced`), settings-integrations (`--integrations`), set-profile (`--profile`)
   - `/gsd-workspace` — folds new-workspace (`--new`), list-workspaces (`--list`), remove-workspace (`--remove`)
 - REQ-CONSOLIDATE-02: Six existing parents absorb wrap-up / sub-operations as flags: `/gsd-update --sync`, `/gsd-update --reapply`, `/gsd-sketch --wrap-up`, `/gsd-spike --wrap-up`, `/gsd-map-codebase --fast`, `/gsd-map-codebase --query`, `/gsd-code-review --fix`, `/gsd-progress --do`, `/gsd-progress --next`.
-- REQ-CONSOLIDATE-03: `/gsd:next` is not the retired workflow-advance command; it is reserved for the state-aware smart-entry launcher. Workflow advancement remains under `/gsd-progress --next`.
+- REQ-CONSOLIDATE-03: `/gsd-next` is not the retired workflow-advance command; it is reserved for the state-aware smart-entry launcher. Workflow advancement remains under `/gsd-progress --next`.
 - REQ-CONSOLIDATE-04: Deleted micro-skill slash forms (the bare `gsd-add-todo`, `gsd-add-backlog`, `gsd-plant-seed`, `gsd-check-todos`, `gsd-add-phase`, `gsd-insert-phase`, `gsd-remove-phase`, `gsd-edit-phase`, `gsd-new-workspace`, `gsd-list-workspaces`, `gsd-remove-workspace`, `gsd-settings-advanced`, `gsd-settings-integrations`, `gsd-set-profile`, `gsd-sketch-wrap-up`, `gsd-spike-wrap-up`, `gsd-reapply-patches`, `gsd-code-review-fix`, …) MUST resolve to "Unknown command" — no shadow stubs.
 - REQ-CONSOLIDATE-05: `autonomous.md` invokes `/gsd-code-review --fix` (was previously calling the deleted `gsd-code-review-fix`).
 
@@ -2899,7 +2931,7 @@ Source commit: abc1234 (3 commits behind HEAD)
 - Executor install failures stop for human verification instead of auto-trying similarly named packages.
 
 **Requirements:**
-- REQ-PKG-GATE-01: Research MUST record package registry, age, download/source signals, slopcheck verdict, and disposition.
+- REQ-PKG-GATE-01: Research MUST record package registry, age, download/source signals, legitimacy verdict, and disposition.
 - REQ-PKG-GATE-02: Planner MUST gate unverified or suspicious package installs before execution.
 - REQ-PKG-GATE-03: Executor MUST NOT auto-substitute package names after failed package-manager installs.
 
@@ -2918,7 +2950,7 @@ Source commit: abc1234 (3 commits behind HEAD)
 | `standard` | Core plus common phase-management commands |
 | `full` | Complete surface; default |
 
-**Runtime control:** `/gsd:surface` lists profile state and enables, disables, or resets skill clusters without reinstalling.
+**Runtime control:** `/gsd-surface` lists profile state and enables, disables, or resets skill clusters without reinstalling.
 
 **Requirements:**
 - REQ-SURFACE-01: Installer MUST resolve `--profile=<name>` and persist the active profile in `.gsd-profile`.
@@ -3156,6 +3188,8 @@ explicit reviewer flags -> --all -> review.default_reviewers -> all detected rev
 
 When a requirement's prose matches **no** shape cue, the probe does not silently drop it (#1110): it emits a single `unclassified — review manually` candidate so the zero-cue requirement is surfaced for the author to resolve like any other (specify / dismiss-with-reason / defer) — a manual-review nudge, not a hard block.
 
+**Non-English projects: the probe reads English, the SPEC does not have to (#2773).** The shape cues are English word-boundary patterns, so a project running with [`response_language`](CONFIGURATION.md) set would otherwise have *every* requirement match nothing, classify to zero shapes, and land in `unclassified` — the taxonomy silently contributing nothing to exactly the kind of spec it exists to harden. `spec-phase` Step 5.5 therefore feeds the probe a faithful **English translation** of each requirement's `text`: that payload is engine input, never user-facing output, so it is translated while the SPEC itself stays in the original language, requirement ids are left untouched, and any acceptance criteria written back from the resolved edges return to `response_language`. Translation makes the classifier *applicable*; it does not make it omniscient. A requirement carrying no shape cue in **any** language still classifies to zero — that is the classifier's recorded recall gap (ADR-857 §98), not a translation failure — and the remedy there is the same one an English project uses: author an explicit `shapes` array on the requirement instead of relying on prose classification.
+
 The resolved edges populate a `## Edge Coverage` section in `SPEC.md`. Unresolved *applicable* edges trigger a soft gate (Resolve / Write-anyway-flagged / Keep-probing) rather than a hard block. Under `--auto`, the probe **never auto-dismisses** — it auto-covers where a defensible criterion exists, otherwise auto-backstops, and logs `[auto] edge coverage: C covered, B backstop, U unresolved`. The one exception is an `unclassified` candidate: `--auto` leaves it **`unresolved`** (surfaced as a flagged assumption), never auto-`backstop` — a missing shape is not evidence an edge exists, so minting a held-out edge obligation would be a false claim.
 
 The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges become `must_haves.truths` the verifier can check, so the section is not merely documentation. A `backstop` edge is lifted as a **structured non-inferable marker** (`{ statement, verification: backstop }`, a flat scalar — not a prose note), which the **honest verifier** then consumes (see below) — closing the loop the edge-probe opened.
@@ -3218,7 +3252,7 @@ Each surfaced prohibition is resolved to exactly one of three states:
 | `dismissed` | Not a genuine prohibition (requires a non-empty reason) | Recorded with its reason; empty dismissals are rejected |
 | `unresolved` | Deferred | Soft-gates the spec; surfaced as a planner assumption |
 
-Each resolved prohibition carries a `verification` tier — `test` (a negative test can enforce it) or `judgment` (only human/LLM judgment can). At verify time, judgment-tier prohibitions route to a never-silent / never-hard-halt soft gate (autonomous emits an `unverified-prohibition — human review recommended` flag); test-tier prohibitions are enforced via the deterministic `check prohibition-enforcement` gate — green when the wired negative test / lint rule passes, hard-gate (flagged, non-green) when missing or failing, in both interactive and autonomous modes (#1259, ADR-550 D5d). Under `--auto`, the probe **never auto-dismisses**. Canon-bound concerns (OWASP / GDPR / fairness) are referred to `/gsd:secure-phase` rather than minting SPEC prohibitions (ADR-550 D6).
+Each resolved prohibition carries a `verification` tier — `test` (a negative test can enforce it) or `judgment` (only human/LLM judgment can). At verify time, judgment-tier prohibitions route to a never-silent / never-hard-halt soft gate (autonomous emits an `unverified-prohibition — human review recommended` flag); test-tier prohibitions are enforced via the deterministic `check prohibition-enforcement` gate — green when the wired negative test / lint rule passes, hard-gate (flagged, non-green) when missing or failing, in both interactive and autonomous modes (#1259, ADR-550 D5d). Under `--auto`, the probe **never auto-dismisses**. Canon-bound concerns (OWASP / GDPR / fairness) are referred to `/gsd-secure-phase` rather than minting SPEC prohibitions (ADR-550 D6).
 
 The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, so the section is not merely documentation.
 
@@ -3255,7 +3289,7 @@ The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, s
 **Reference:** [`gsd capability` command reference](reference/gsd-capability-command.md) · [ADR-1244](adr/1244-capability-ecosystem.md)
 ### 148. Smart Entry Launcher
 
-**Command:** `/gsd:next`
+**Command:** `/gsd-next`
 
 **Tool:** `gsd-tools smart-entry [--json]`
 
@@ -3282,7 +3316,7 @@ The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, s
 
 **Purpose:** Express every host integration against one public, versioned contract (ADR-1239 Phase A, #1690) instead of bespoke per-host wiring, so onboarding a new host becomes additive descriptor work.
 
-**Behavior:** The interface exposes six interface points (`command`, `dispatch`, `model`, `hooks`, `state`, `artifact`), eight negotiated axes, and a `PROTOCOL_VERSION` handshake that negotiates down to `min(host, engine)`. In 1.7.0, 14 runtimes were migrated onto the interface via imperative adapters (OpenCode #2087, Cursor #2089, Cline #2090, Hermes #2091, Qwen #2092, Kilo #2093, Trae #2094, Kimi #2095, Antigravity #2096, Augment #2097), a declarative adapter (Codex #2088), plus full lifecycle-hook wiring for CodeBuddy (#2098), GitHub Copilot (#2099), and Windsurf (#2100). Descriptors gained an `extensionEvents` vocabulary (#1946), and `/gsd:surface` now reproduces a runtime's agent output byte-for-byte from the installer's descriptors (#1575).
+**Behavior:** The interface exposes six interface points (`command`, `dispatch`, `model`, `hooks`, `state`, `artifact`), eight negotiated axes, and a `PROTOCOL_VERSION` handshake that negotiates down to `min(host, engine)`. In 1.7.0, 14 runtimes were migrated onto the interface via imperative adapters (OpenCode #2087, Cursor #2089, Cline #2090, Hermes #2091, Qwen #2092, Kilo #2093, Trae #2094, Kimi #2095, Antigravity #2096, Augment #2097), a declarative adapter (Codex #2088), plus full lifecycle-hook wiring for CodeBuddy (#2098), GitHub Copilot (#2099), and Windsurf (#2100). Descriptors gained an `extensionEvents` vocabulary (#1946), and `/gsd-surface` now reproduces a runtime's agent output byte-for-byte from the installer's descriptors (#1575).
 
 **New runtimes:** ZCode (Z.ai — Agentic Development Environment for GLM-5.2, #1925), pi (`npx @opengsd/gsd-core --pi`, #2102), and a repo-local VS Code extension driven through the adapter (#2103). The retired Gemini CLI now redirects to Antigravity CLI, its official successor (#1928).
 
@@ -3348,7 +3382,7 @@ The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, s
 
 ### 156. API-Coverage Gate
 
-**Command:** `/gsd:verify-work`
+**Command:** `/gsd-verify-work`
 
 **Purpose:** A phase that integrates an external API, SDK, or service can no longer seal verification without a decided coverage matrix (#1562).
 
@@ -3362,7 +3396,7 @@ The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, s
 
 ### 158. Broken-Windows Ledger
 
-**Behavior:** A cross-phase defect register at `.planning/WINDOWS.md` accumulates stubs, TODOs, skipped tests, unrun verifies, and unmet truths (#1950). `/gsd:ship` blocks while any entry is `open`; an entry can be `waived` only with a recorded reason (auditable) or marked `fixed` (removed from the blocking set). `/gsd:progress` surfaces the open + waived counts.
+**Behavior:** A cross-phase defect register at `.planning/WINDOWS.md` accumulates stubs, TODOs, skipped tests, unrun verifies, and unmet truths (#1950). `/gsd-ship` blocks while any entry is `open`; an entry can be `waived` only with a recorded reason (auditable) or marked `fixed` (removed from the blocking set). `/gsd-progress` surfaces the open + waived counts.
 
 **Commands:** `gsd-tools windows status | append | waive | fixed`.
 
@@ -3371,3 +3405,125 @@ The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, s
 **Backward compatibility:** A project with no `.planning/WINDOWS.md` reports `open_count: 0` and ships cleanly; the gate only activates once windows are recorded.
 
 **Configuration:** `graphify.graph_path`
+
+### 159. Complexity-Triggered Refactor
+
+**Behavior:** An `execute:post` step measures the complexity of the files a phase touched (decision-point counting over comment- and literal-stripped source, no external dependency) and surfaces a scoped refactor proposal at `.planning/phases/<N>/<NN>-REFACTOR.md` when a function's score exceeds `refactor.complexity_threshold` or its growth over its recorded anchor exceeds `refactor.complexity_jump_delta` — whichever trips first, both reported. Trigger semantics are strictly greater (ESLint's `complexity: {max: N}` convention), so a score exactly equal to the threshold does not trigger. The anchor is set the first time a function is observed and moves only when the proposal is dispositioned via `refactor accept` or `refactor decline` — never when the score alone improves — so the jump delta is cumulative growth since the last conscious decision about that function, not the change made in a single phase. Advisory by default: the proposal is informational only, never edits code, and never blocks. Opt-in `refactor.trigger_strict` records an untriaged proposal as an open `deviation` entry in the broken-windows ledger (#1950) instead — it does not block on its own; ship-blocking is broken-windows' existing `ship:pre` gate, enabled separately with `workflow.windows_enforce`. Without broken-windows installed, strict mode still records the proposal locally and says so. Enabling `refactor.trigger_strict` without `workflow.windows_enforce` also on (or with broken-windows absent) surfaces a typed `refactor_strict_not_enforcing` warning on every triggering evaluate, naming the exact remediation, so this enforcement gap is never silent. A declined proposal resolves its ledger entry as `waived` with the recorded reason; an accepted one resolves as `fixed`. The metric is approximate by construction: biased against a flat `switch`, blind to nesting depth, JS/TS-family only, and a renamed function loses its anchor (issue #1953).
+
+**Commands:** `gsd-tools refactor evaluate | status | accept | decline`.
+
+**Config:** `refactor.trigger_enabled` (master gate, default `false`), `refactor.complexity_threshold` (default `15`), `refactor.complexity_jump_delta` (default `5`), `refactor.trigger_strict` (default `false`). See [Configuration Reference](CONFIGURATION.md#refactor-trigger-settings).
+
+**Backward compatibility:** Off by default. When `refactor.trigger_enabled` is `false` the hook never runs and writes nothing; a project that never enables it is completely unaffected.
+
+---
+
+### 160. Archive Quick Tasks at Milestone Close
+
+**Command:** `/gsd-complete-milestone` (forward path), `/gsd-cleanup` (retroactive path), `gsd-tools milestone complete --archive-quick` / `gsd-tools milestone archive-quick <version>` (#2142)
+
+**Behavior:** `.planning/quick/` otherwise accumulates one directory per `/gsd-quick` task forever. `/gsd-complete-milestone` now offers a Yes/Skip prompt — when accepted, it moves every directory under `.planning/quick/` into `.planning/milestones/<version>-quick/`, (re)writes that archive directory's `README.md` (an index built by scanning the archive directory, one entry per task, linked to its `SUMMARY.md` when one exists), and clears the data rows of `STATE.md`'s `### Quick Tasks Completed` table while preserving its header and detected column variant. `/gsd-cleanup` offers the same archival retroactively, for milestones that were already closed before their quick tasks were swept, via the narrower `milestone archive-quick <version>` command — identical move/index/reset behavior, but without touching `ROADMAP.md`, `REQUIREMENTS.md`, `MILESTONES.md`, or milestone-completion guards, so it can be re-run safely against an already-completed milestone.
+
+**Why opt-in.** Phase-directory archival is default-ON (#1871) — omitting a phase directory from an archive would silently leave stale execution history in the way of the next milestone's roadmap. Quick tasks carry no such downstream conflict, so archival here defaults OFF: a user who never passes `--archive-quick` sees zero behavior change. This is a deliberate asymmetry with phase archival, not an oversight.
+
+**Why bucket-all, not per-milestone.** `.planning/quick/` is a flat directory with no on-disk record of which milestone a given task belongs to. Splitting tasks per milestone was considered and rejected — inferring provenance from dates (creation time vs. a milestone's shipped date) is a proxy, not a fact, and a wrong inference on a one-way `mv` is silently irreversible. Archival instead buckets everything currently in `.planning/quick/` into the one milestone being completed (or, on the retroactive path, the one milestone chosen), and says so in the confirmation prompt.
+
+**Why the index is built from disk, not from `STATE.md`'s table.** The `### Quick Tasks Completed` table is a running log a workflow step appends to — it demonstrably drifts from what's actually in `.planning/quick/` (the motivating case: 53 rows against 49 directories, ~22 rows pointing at directories that no longer existed, 18 directories with no row at all). Building the archive's `README.md` index by scanning the archive directory itself, rather than trusting the table, means the index can never inherit that drift; a re-run's index also naturally includes entries a prior run already archived, since it's re-derived from what's physically present.
+
+**Known limits:**
+- No per-milestone provenance — bucket-all is the only option (see above).
+- A `### Quick Tasks Completed` table whose columns match neither registered variant (with/without a Status column) is left untouched with a warning rather than reset, since clearing it would risk destroying rows under a schema GSD doesn't recognize.
+- A `STATE.md` with no `### Quick Tasks Completed` section at all is a normal, silent no-op for the reset step — the section is created lazily by `/gsd-quick`, not present in the project template.
+
+See [Archiving quick tasks](how-to/handle-quick-and-fast-tasks.md#archiving-quick-tasks) for the full walkthrough.
+
+---
+
+### 161. Verify-Command Path Grounding
+
+**Command:** `/gsd-plan-phase` (automatic), `gsd-tools check verify-command-paths <N>` (#2401)
+
+**Behavior:** A planner authoring a per-task `<automated>` verify command has no line of sight to whether the path it just wrote actually resolves, and `gsd-plan-checker` had no deterministic way to check — so it hand-reasoned the filesystem and, in the motivating case, prescribed two successively-wrong replacement paths (the second citing a `package.json` that did not exist). Two changes close that:
+
+1. **Prior-command inheritance.** The nearest prior phase's `<automated>` commands are surfaced to the planner as `prior_verify_commands`, **at every context window**. Cross-phase enrichment was previously gated on `context_window >= 500000`; at 200k the planner re-invented the command and got it wrong. This payload is a handful of one-liners, so it is never gated.
+2. **A deterministic probe.** `gsd-tools check verify-command-paths <N>` resolves each `<automated>` command's target directory and reports whether it exists and holds the manifest the command needs. `/gsd-plan-phase` runs it before the plan-check pass and hands the JSON to the checker, which acts on `severity` instead of guessing.
+
+**It never executes command text.** PLAN.md is model-authored, so running it from the checker would be arbitrary code execution — and would trigger the real lint/build as a side effect. The probe only resolves paths and stats directories; a `package.json` it finds is read for script names only.
+
+**Why a recognizer, not a shell parser.** Interpreting shell would mean maintaining a bad shell. Exactly two forms are grounded — a leading `cd <literal>` chain and `npm --prefix <literal>` — and any path carrying a variable, glob, substitution, or `~` returns `unresolvable`, which is a warning and never a blocker. The parser's incompleteness is the specification: it degrades to "cannot prove" rather than growing features. Refusing to guess is the fix, not a limitation of it.
+
+**It reports, it never prescribes.** The payload carries the target that failed and what was missing; there is deliberately no `suggestion` field. Choosing the replacement is the planner's job — and the planner now has the prior phase's proven command to reach for.
+
+**Not findings:** a target an earlier task in this phase creates (`pending_creation`), a command with no `cd`/`--prefix` at all, and the Nyquist `MISSING — Wave 0 …` sentinel, which Dimension 8 owns.
+
+**Known limits:**
+- Only `cd <literal>` and `npm --prefix <literal>` are recognized. `pushd`, `make -C`, `yarn --cwd`, `pnpm -C`, and `cargo --manifest-path` report `unresolvable`.
+- Verdicts are relative to the *checker's* project root. Under parallel worktree execution the executor's root differs, so a bare ancestor climb (`cd ../..`) is reported `outside_root` as a warning rather than asserted about.
+- `script_missing` is advisory only — this phase may be adding the script — so a genuinely mistyped npm script still reaches the executor.
+
+See [Resolve verify-command path findings](how-to/resolve-verify-command-path-findings.md) and [`gsd-tools check verify-command-paths`](COMMANDS.md#gsd-tools-check-verify-command-paths).
+
+---
+
+### 162. Statusline STATE.md Freshness Marker
+
+**Config key:** `statusline.show_state_freshness` (default `false`)
+
+**Purpose:** A solo developer returning to a project after time away reads "Phase 4, executing" in `STATE.md` and acts on it — without noticing the codebase has moved 40 commits since that line was written. `/gsd-health` reports this as `W024`, but only if the user thinks to run it. The statusline is the one surface seen continuously without asking (#2734).
+
+**Behavior:** Renders `state ~N commits back` inside the GSD-state segment when `STATE.md` carries a `state_head` stamp (#2573) and `HEAD` is at least `STATE_HEAD_ADVISORY_COMMITS` (20) commits past it. Both statusline formats carry it — the default renderer and the compact `statusline.state_format` one.
+
+**The threshold is 20, deliberately not 1.** With `commit_docs: true` (the default) the commit carrying a `STATE.md` sync advances `HEAD` by one, so a `> 0` threshold would render `state ~1 commits back` permanently on a project that is by construction fresh — alarm fatigue on the one always-visible surface.
+
+**It degrades to silence rather than to a wrong answer.** The marker is absent — never "fresh" — when the stamp is malformed, when the project root does not own its `.git` (an enclosing unrelated repo would otherwise answer), in a `planning.sub_repos` workspace (the outer `HEAD` never advances when code lands in children), when history was rewound past the stamp, and when git is unavailable or slow. A freshness claim the project cannot substantiate degrades to *unknown*.
+
+**Cost:** exactly one bounded `git rev-list` call per render, and only when enabled *and* a stamp is present — `rev-list --left-right --count` answers ancestry and distance together, and repo pinning is a filesystem check rather than a subprocess. Disabled (the default) it adds none.
+
+**A proxy, never a drift measurement.** The count includes commits that touched nothing `STATE.md` describes, and the stamp restamps on every state write — so a low count means "something wrote STATE recently", not "STATE is accurate". Rendered with a `~`; never gate on it.
+
+**Reference:** [Configuration](CONFIGURATION.md) · [Read the statusline freshness marker](how-to/read-the-statusline-freshness-marker.md) · [ADR-2164](adr/2164-statusline-scope-boundary.md)
+
+### 163. Read-Only Planning Snapshot (`planning inspect`)
+
+**Command:** `gsd-tools query planning inspect`
+
+**Purpose:** Give downstream consumers — harness UIs, mission-control surfaces, dashboards, bots — one schema-versioned JSON document describing everything `.planning/` knows, so nothing outside gsd-core has to parse `ROADMAP.md` / `REQUIREMENTS.md` / `*-PLAN.md` / `*-SUMMARY.md` a second time. gsd-core is the single source of `.planning/` truth; a second parser is a second answer.
+
+**Requirements:**
+- REQ-INSP-01: `PLANNING_INSPECT_SCHEMA_VERSION = 1` is emitted as `schema_version`. Consumers MUST reject any other value rather than best-effort-parse an unknown shape.
+- REQ-INSP-02: Read-only. The command mutates no planning state, and mutates nothing on disk, under any input.
+- REQ-INSP-03: Unknown or conflicting evidence serializes as `null` / `"unknown"` with a coded entry in `diagnostics[]` — never inferred, reconciled, or defaulted. Every key is always present; a key is never omitted to signal absence.
+- REQ-INSP-04: Argument errors fail loud (non-zero exit, typed `ERROR_REASON`); data gaps do not. v1 takes no arguments, and a stray positional or unknown flag is a usage error rather than a silently-ignored one.
+- REQ-INSP-05: Roadmap acceptance, verification status, and UAT items are reported side by side per phase and are never folded into a single verdict. A ROADMAP checkbox carries `authoritative: false` — completion is derived from disk state.
+- REQ-INSP-06: `accepted_phases` and `completed_plans` are independent fractions. `percent` is `null` whenever the scope is not `complete`, per the same rule the roadmap and progress surfaces follow.
+- REQ-INSP-07: Payloads over ~50 KB use the existing `@file:` spill channel, resolved transparently before stdout.
+
+**Why it does not simply serialize the internal snapshot.** `PlanningSnapshot` (the diagnostic-rule subject introduced by ADR-3180 §8.1) is deliberately additive and still growing — four fields at Phase 10, twenty-plus by Phase 12. Handing that shape to external consumers would freeze an internal contract by accident. `planning inspect` declares its own flat schema and maps into it, so a field added to `PlanningSnapshot` never changes what this command emits.
+
+**Composed, never re-derived.** Milestone identity and phase enumeration arrive via `buildPlanningSnapshot`; completion from `isPhaseComplete` (disk-strict); live-plan counting from `scanPhasePlans`; the percentage arithmetic from `clampPercent`; STATE fields from `stateFieldValue`; plan bodies from the Plan Document Module; requirement IDs from `parseRequirements`; UAT items from `parseUatItems`. Markdown structure is read through the Markdown Sectionizer and Markdown Table Model seams, so the Traceability table is resolved by column name against its registered schema rather than by a position-anchored regex.
+
+**Known limit — task-scoped file provenance.** A `<task>` declares the files it plans to touch, but `SUMMARY.md`'s `## Files Created/Modified` describes the whole plan. Spreading that list across a plan's tasks would be inference, so a task's `changed_files` is populated only where the summary attributes files to that specific task; otherwise it is `null` with `provenance: "plan_scoped"`. Closing this needs a change to the SUMMARY format, not to the reader.
+
+**Reference:** [CLI Tools](CLI-TOOLS.md#planning-inspect) · [Consume the planning snapshot](how-to/consume-the-planning-snapshot.md)
+
+### 164. Live-DOM UAT Capability
+
+**Config key:** `workflow.live_dom_uat` (default `false`)
+
+**Purpose:** A phase with a live-UI acceptance criterion could not be finished by the agent that executed it. `gsd-executor` carries no browser tools, so it correctly returned a `checkpoint:human-action` — even though the work was not human-only, just tool-less. Every such phase quietly degraded from *executed by the executor* to *executed, then finished by hand in the orchestrator*, and the plan's `autonomous: false` marker could not distinguish "a human must judge this" from "the executor lacks the tool" (#2856).
+
+**Behavior:** A default-off capability owns one boolean key, one agent, and one additive step. When the key is on, `gsd-dom-verifier` runs at `execute:wave:post` and writes `{phase}-DOM-VERIFY.md`; the orchestrator's `automated_ui_verification` step additionally considers `mcp__chrome-devtools__*` / `mcp__claude-in-chrome__*` when present.
+
+**The executor's tool surface is unchanged in every configuration.** Widening it was the reported proposal and was refused: for a first-party agent the static `tools:` list is the only control that exists — no capability can grant tools to one ([ADR-1244](adr/1244-capability-ecosystem.md) D2), no hook kind grants tool permissions ([ADR-857](adr/857-capability-system.md) D4), and there is no per-dispatch override. Browser reach lives in one purpose-built agent that carries no `Bash`.
+
+**Two independent gates, both fail-closed.** The capability's `activationKey` makes it resolve inactive when the key is off — `resolveLoopHooks` renders a hook only on `state.active === true` — and the step carries its own `when` guard. Tool presence alone never activates it: a browser MCP configured for unrelated work is not driven by default.
+
+**The pre-existing Playwright path is untouched.** `mcp__playwright__*` keeps the gating it already had (presence plus an active UI phase). Pulling it behind a new default-off key would have silently removed working behavior from current users on upgrade; the key gates only the newly added families.
+
+**It tolerates the browser-profile lock rather than coordinating it.** `chrome-devtools-mcp` holds an exclusive lock on its profile, so parallel waves collide. `--isolated` is a flag on the operator's own MCP server registration — GSD neither launches that server nor passes its arguments — so the verifier reports `could_not_look` / `profile_locked`, names the flag, and stops. No retry, no held-up wave.
+
+**`nothing_to_report` is never conflated with `could_not_look`.** A report claiming no issues when it never opened a browser is worse than no report; the artifact carries a closed reason enum so the two are always distinguishable.
+
+**Known limits:** no sandbox — once enabled, nothing constrains which origins are reached ([ADR-1244](adr/1244-capability-ecosystem.md) D5); DOM observation only, no screenshot diffing, accessibility audit, or performance tracing.
+
+**Reference:** [Configuration](CONFIGURATION.md) · [Enable live-DOM verification](how-to/enable-live-dom-verification.md) · [Explanation](explanation/live-dom-uat-capability.md) · [Agents](AGENTS.md)

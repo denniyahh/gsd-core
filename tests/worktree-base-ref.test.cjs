@@ -14,7 +14,10 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
+
+const { makeFaultyGit } = require('./helpers/faulty-deps.cjs');
 
 const MODULE_PATH = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'worktree-base-ref.cjs'
@@ -264,11 +267,22 @@ describe('evaluateWorktreeBaseDegrade', () => {
     };
   }
 
-  test('effectiveBaseRef="head" → no degrade, reason baseref-head, execGit never called', () => {
+  // #3659 rows share the diverged-HEAD stub shape — one builder keeps the
+  // four fixtures from drifting apart.
+  function makeDivergedExecGit(headSha, forkSha) {
+    const ok = (stdout) => ({ exitCode: 0, stdout, stderr: '', signal: null, error: null });
+    return makeExecGit({
+      'rev-parse HEAD': ok(headSha),
+      'rev-parse --verify --quiet origin/HEAD': ok(forkSha),
+    });
+  }
+
+  test('effectiveBaseRef="head" + orchestrator mode → no degrade, reason baseref-head, execGit never called (#3659)', () => {
     let called = false;
     const result = evaluateWorktreeBaseDegrade({
       execGit: () => { called = true; return { exitCode: 0, stdout: '', stderr: '', signal: null, error: null }; },
       effectiveBaseRef: 'head',
+      isolationMode: 'orchestrator-worktree',
     });
     assert.strictEqual(result.shouldDegrade, false);
     assert.strictEqual(result.reason, 'baseref-head');
@@ -276,7 +290,64 @@ describe('evaluateWorktreeBaseDegrade', () => {
     assert.strictEqual(result.headSha, null);
     assert.strictEqual(result.forkRef, null);
     assert.strictEqual(result.forkSha, null);
-    assert.strictEqual(called, false, 'execGit must not be called when effectiveBaseRef is head');
+    assert.strictEqual(called, false, 'orchestrator mode: GSD controls the fork start-point, head is honored by construction');
+  });
+
+  test('effectiveBaseRef="head" + harness mode (default) + diverged HEAD → degrade, reason baseref-head-ignored-by-harness (#3659)', () => {
+    // #48 verified 5/5 that the harness dispatch path never routes through
+    // project-settings baseRef — with head set on a diverged branch the check
+    // must compare and degrade, not trust the setting.
+    const HEAD_SHA = '11111111223344aa11111111223344aa11111111';
+    const FORK_SHA = '99999999223344bb99999999223344bb99999999';
+    const result = evaluateWorktreeBaseDegrade({
+      execGit: makeDivergedExecGit(HEAD_SHA, FORK_SHA),
+      effectiveBaseRef: 'head',
+    });
+    assert.strictEqual(result.shouldDegrade, true,
+      'head must not suppress the comparison in harness mode (#3659)');
+    assert.strictEqual(result.reason, 'baseref-head-ignored-by-harness');
+    assert.strictEqual(result.headSha, HEAD_SHA);
+    assert.strictEqual(result.forkRef, 'origin/HEAD');
+    assert.strictEqual(result.forkSha, FORK_SHA);
+  });
+
+  test('effectiveBaseRef="head" + explicit harness-worktree mode + diverged → degrade (#3659)', () => {
+    const HEAD_SHA = 'aaaa1111223344ccaaaa1111223344ccaaaa1111';
+    const FORK_SHA = 'bbbb1111223344ddbbbb1111223344ddbbbb1111';
+    const result = evaluateWorktreeBaseDegrade({
+      execGit: makeDivergedExecGit(HEAD_SHA, FORK_SHA),
+      effectiveBaseRef: 'head',
+      isolationMode: 'harness-worktree',
+    });
+    assert.strictEqual(result.shouldDegrade, true);
+    assert.strictEqual(result.reason, 'baseref-head-ignored-by-harness');
+  });
+
+  test('effectiveBaseRef="head" + harness + HEAD == origin/HEAD → no degrade, reason head-matches-fork (#3659)', () => {
+    const SAME_SHA = 'cccc1111223344eecccc1111223344eecccc1111';
+    const result = evaluateWorktreeBaseDegrade({
+      execGit: makeExecGit({
+        'rev-parse HEAD': { exitCode: 0, stdout: SAME_SHA, stderr: '', signal: null, error: null },
+        'rev-parse --verify --quiet origin/HEAD': { exitCode: 0, stdout: SAME_SHA, stderr: '', signal: null, error: null },
+      }),
+      effectiveBaseRef: 'head',
+      isolationMode: 'harness-worktree',
+    });
+    assert.strictEqual(result.shouldDegrade, false,
+      'when the harness fork base happens to equal HEAD there is no mismatch to degrade for');
+    assert.strictEqual(result.reason, 'head-matches-fork');
+  });
+
+  test('harness head-diverge message cites the verified harness limitation (#3659)', () => {
+    const HEAD_SHA = 'dddd1111223344ffdddd1111223344ffdddd1111';
+    const FORK_SHA = 'eeee1111223344abeeceeee1111223344abeeceee';
+    const result = evaluateWorktreeBaseDegrade({
+      execGit: makeDivergedExecGit(HEAD_SHA, FORK_SHA),
+      effectiveBaseRef: 'head',
+    });
+    assert.ok(result.message !== null, 'divergence under head must carry the explanatory message');
+    assert.ok(result.message.includes('#48'), 'message must cite the verified harness limitation');
+    assert.ok(result.message.includes('sequentially'), 'message must state the sequential fallback');
   });
 
   test('git rev-parse HEAD fails → no degrade, reason no-head', () => {
@@ -298,6 +369,122 @@ describe('evaluateWorktreeBaseDegrade', () => {
     });
     assert.strictEqual(result.shouldDegrade, false);
     assert.strictEqual(result.reason, 'no-head');
+  });
+
+  // ─── #3050: fail-closed matrix for git rev-parse HEAD outcomes ─────────────
+  // DECIDED RULE: degrade UNLESS git completed and gave a definitive answer.
+  //   - timeout                       → degrade, reason 'head-unresolvable'
+  //   - exitCode === 128              → NO degrade, reason 'no-head' (unchanged)
+  //   - exit 0 with non-empty sha     → proceed (unchanged)
+  //   - anything else (127, other     → degrade, reason 'head-unresolvable'
+  //     non-zero, exit 0 empty stdout
+  //     is pinned separately above)
+
+  test('git rev-parse HEAD TIMES OUT → shouldDegrade:true, reason "head-unresolvable" (#3050)', () => {
+    const timedOutErr = new Error('spawnSync git ETIMEDOUT');
+    timedOutErr.code = 'ETIMEDOUT';
+    const result = evaluateWorktreeBaseDegrade({
+      execGit: makeExecGit({
+        'rev-parse HEAD': { exitCode: null, stdout: '', stderr: '', signal: 'SIGTERM', error: timedOutErr },
+      }),
+    });
+    assert.strictEqual(result.shouldDegrade, true);
+    assert.strictEqual(result.reason, 'head-unresolvable');
+    assert.ok(result.message, 'a fail-closed degrade must carry a non-null explanatory message');
+    assert.strictEqual(result.headSha, null);
+  });
+
+  test('cross-platform: timeout WITHOUT signal set (Windows shape) still degrades (#3050)', () => {
+    // Node.js guarantees error.code === 'ETIMEDOUT' cross-platform when the
+    // spawnSync `timeout` option fires; `signal` reporting is the
+    // platform-fragile half and must not be required to detect a timeout.
+    const timedOutErr = new Error('spawnSync git ETIMEDOUT');
+    timedOutErr.code = 'ETIMEDOUT';
+    const result = evaluateWorktreeBaseDegrade({
+      execGit: makeExecGit({
+        'rev-parse HEAD': { exitCode: null, stdout: '', stderr: '', signal: null, error: timedOutErr },
+      }),
+    });
+    assert.strictEqual(result.shouldDegrade, true);
+    assert.strictEqual(result.reason, 'head-unresolvable');
+  });
+
+  test('git missing (exitCode 127) → degrade, reason "head-unresolvable" (#3050)', () => {
+    const result = evaluateWorktreeBaseDegrade({
+      execGit: makeExecGit({
+        'rev-parse HEAD': { exitCode: 127, stdout: '', stderr: 'git: not found', signal: null, error: null },
+      }),
+    });
+    assert.strictEqual(result.shouldDegrade, true);
+    assert.strictEqual(result.reason, 'head-unresolvable');
+  });
+
+  // Boundary coverage: 128 is the ONLY benign non-zero exit (definitive "not a
+  // git repository"). 129 (limit+1) must NOT be swept into that carve-out.
+  test('exitCode 129 (limit+1 boundary, just past the 128 carve-out) → degrade, reason "head-unresolvable" (#3050)', () => {
+    const result = evaluateWorktreeBaseDegrade({
+      execGit: makeExecGit({
+        'rev-parse HEAD': { exitCode: 129, stdout: '', stderr: 'fatal: something else', signal: null, error: null },
+      }),
+    });
+    assert.strictEqual(result.shouldDegrade, true);
+    assert.strictEqual(result.reason, 'head-unresolvable');
+  });
+
+  test('other non-zero, non-128 exit → degrade, reason "head-unresolvable" (#3050)', () => {
+    const result = evaluateWorktreeBaseDegrade({
+      execGit: makeExecGit({
+        'rev-parse HEAD': { exitCode: 1, stdout: '', stderr: 'fatal: something else', signal: null, error: null },
+      }),
+    });
+    assert.strictEqual(result.shouldDegrade, true);
+    assert.strictEqual(result.reason, 'head-unresolvable');
+  });
+
+  test('exitCode 128 ("not a git repository") still does NOT degrade (#3050 regression guard)', () => {
+    const result = evaluateWorktreeBaseDegrade({
+      execGit: makeExecGit({
+        'rev-parse HEAD': { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository', signal: null, error: null },
+      }),
+    });
+    assert.strictEqual(result.shouldDegrade, false);
+    assert.strictEqual(result.reason, 'no-head');
+  });
+
+  // ─── #3057 B8: headAbsenceVerified distinguishes the two "no-head" causes ──
+  //
+  // Both outcomes below keep `shouldDegrade:false, reason:'no-head'` — that
+  // product decision is deliberately UNCHANGED (pinned by the regression
+  // guards above and flagged in the #3050 review as still an open question).
+  // What changes is that a caller can now tell git's DEFINITIVE "not a git
+  // repository" answer (exit 128) apart from git completing but returning
+  // nothing useful (exit 0, empty stdout) — the module's own #380-383 comment
+  // named this gap; these two paired tests prove it is closed.
+
+  test('exit 128 — git\'s definitive "not a git repository" answer → headAbsenceVerified:true', () => {
+    const faultyGit = makeFaultyGit({
+      faults: [{ kind: 'exit', exitCode: 128, stderr: 'fatal: not a git repository' }],
+    });
+    const result = evaluateWorktreeBaseDegrade({ execGit: faultyGit });
+    assert.strictEqual(result.shouldDegrade, false);
+    assert.strictEqual(result.reason, 'no-head');
+    assert.strictEqual(result.headAbsenceVerified, true);
+  });
+
+  test('exit 0 with empty stdout — git completed but gave no useful answer → headAbsenceVerified:false', () => {
+    // makeFaultyGit()'s default passthrough IS exit 0 / empty stdout / no
+    // error / not timed out — a real, completed, but non-substantive answer.
+    const faultyGit = makeFaultyGit();
+    const result = evaluateWorktreeBaseDegrade({ execGit: faultyGit });
+    assert.strictEqual(result.shouldDegrade, false);
+    assert.strictEqual(result.reason, 'no-head');
+    assert.strictEqual(result.headAbsenceVerified, false);
+  });
+
+  test('headAbsenceVerified is null (not applicable) for a reason other than no-head', () => {
+    const result = evaluateWorktreeBaseDegrade({ effectiveBaseRef: 'head', isolationMode: 'orchestrator-worktree' });
+    assert.strictEqual(result.reason, 'baseref-head');
+    assert.strictEqual(result.headAbsenceVerified, null);
   });
 
   test('HEAD == origin/HEAD → no degrade, reason head-matches-fork', () => {
@@ -330,8 +517,10 @@ describe('evaluateWorktreeBaseDegrade', () => {
     assert.strictEqual(result.headSha, HEAD_SHA);
     assert.strictEqual(result.forkRef, 'origin/HEAD');
     assert.strictEqual(result.forkSha, FORK_SHA);
-    // Verify message contains the short SHAs and the issue reference
-    const expectedMsg = `⚠ Worktree base mismatch: HEAD (${HEAD_SHA.slice(0, 8)}) differs from origin/HEAD (${FORK_SHA.slice(0, 8)}). Running this phase sequentially on the main working tree. To keep parallel worktrees, set worktree.baseRef:"head" in .claude/settings.local.json (or run: gsd-tools worktree set-baseref). See #683.`;
+    // Verify message contains the short SHAs and the corrected remediation
+    // (#3659: the old text advised setting baseRef:"head", which the harness
+    // does not read).
+    const expectedMsg = `⚠ Worktree base mismatch: HEAD (${HEAD_SHA.slice(0, 8)}) differs from origin/HEAD (${FORK_SHA.slice(0, 8)}). Running this phase sequentially on the main working tree. Parallel worktrees return once HEAD is merged/pushed so origin/HEAD matches it. (worktree.baseRef:"head" applies only where GSD itself creates the worktree — the runtime harness does not read it; #48, #3659.)`;
     assert.strictEqual(result.message, expectedMsg);
   });
 
@@ -368,7 +557,7 @@ describe('evaluateWorktreeBaseDegrade', () => {
     assert.strictEqual(result.reason, 'fork-ref-unknown');
     assert.strictEqual(result.forkRef, null);
     assert.strictEqual(result.forkSha, null);
-    const expectedMsg = `⚠ Cannot determine the worktree fork base (origin/HEAD unresolved). Running this phase sequentially on the main working tree to avoid a base mismatch. To keep parallel worktrees, set worktree.baseRef:"head" in .claude/settings.local.json (or run: gsd-tools worktree set-baseref). See #683.`;
+    const expectedMsg = `⚠ Cannot determine the worktree fork base (origin/HEAD unresolved). Running this phase sequentially on the main working tree to avoid a base mismatch. Parallel worktrees return once origin/HEAD resolves and matches HEAD. See #683, #3659.`;
     assert.strictEqual(result.message, expectedMsg);
   });
 
@@ -422,7 +611,7 @@ describe('cmdWorktreeBaseCheck', () => {
     };
   }
 
-  test('baseRef=head in settings → shouldDegrade false, reason baseref-head; write emits valid JSON', () => {
+  test('baseRef=head in settings + --mode orchestrator-worktree → shouldDegrade false, reason baseref-head; write emits valid JSON (#3659)', () => {
     const cwd = '/repo';
     const claudeDir = '/repo/.claude';
     let written = '';
@@ -436,11 +625,82 @@ describe('cmdWorktreeBaseCheck', () => {
       // Hermetic: point userClaudeDir at a non-existent path so real ~/.claude is never read
       userClaudeDir: '/nonexistent-hermetic-user-dir',
     };
-    const result = cmdWorktreeBaseCheck(cwd, [], deps);
+    const result = cmdWorktreeBaseCheck(cwd, ['--mode', 'orchestrator-worktree'], deps);
     assert.strictEqual(result.shouldDegrade, false);
     assert.strictEqual(result.reason, 'baseref-head');
     const parsed = JSON.parse(written);
     assert.deepStrictEqual(parsed, result);
+  });
+
+  test('baseRef=head in settings + default (harness) mode + diverged HEAD → shouldDegrade true (#3659)', () => {
+    const cwd = '/repo';
+    const claudeDir = '/repo/.claude';
+    const HEAD_SHA = 'fade1111223344cafade1111223344cafade1111';
+    const FORK_SHA = 'bead1111223344dbbead1111223344dbbead1111';
+    const deps = {
+      readFile: (p) => {
+        if (p === path.join(claudeDir, 'settings.local.json')) return JSON.stringify({ worktree: { baseRef: 'head' } });
+        return null;
+      },
+      execGit: makeExecGitCheck({
+        'rev-parse HEAD': { exitCode: 0, stdout: HEAD_SHA, stderr: '', signal: null, error: null },
+        'rev-parse --verify --quiet origin/HEAD': { exitCode: 0, stdout: FORK_SHA, stderr: '', signal: null, error: null },
+      }),
+      write: () => {},
+      userClaudeDir: '/nonexistent-hermetic-user-dir',
+    };
+    const result = cmdWorktreeBaseCheck(cwd, [], deps);
+    assert.strictEqual(result.shouldDegrade, true,
+      'settings head must not suppress the harness-mode comparison (#3659)');
+    assert.strictEqual(result.reason, 'baseref-head-ignored-by-harness');
+  });
+
+  test('--mode rejects invalid values — no silent default that would re-open the #3659 hole', () => {
+    const cwd = '/repo';
+    const deps = {
+      readFile: () => null,
+      execGit: makeExecGitCheck({}),
+      write: () => {},
+      userClaudeDir: '/nonexistent-hermetic-user-dir',
+    };
+    assert.throws(
+      () => cmdWorktreeBaseCheck(cwd, ['--mode', 'bogus-mode'], deps),
+      /--mode must be harness-worktree or orchestrator-worktree/
+    );
+    assert.throws(
+      () => cmdWorktreeBaseCheck(cwd, ['--mode'], deps),
+      /--mode must be harness-worktree or orchestrator-worktree/
+    );
+  });
+
+  test('default emit goes through fs.writeSync(1, …) — the seam --pick intercepts (#3659)', (t) => {
+    // The CLI's --pick capture patches fs.writeSync, not process.stdout.write;
+    // under $(…) command substitution the stdout.write default made --pick
+    // emit the full JSON, so the workflow auto-degrade guards never matched.
+    const fds = [];
+    const chunks = [];
+    const original = fs.writeSync;
+    fs.writeSync = (fd, buf, offset, length) => {
+      fds.push(fd);
+      const start = offset ?? 0;
+      const end = length ?? (typeof buf === 'string' ? buf.length : buf.length);
+      chunks.push(typeof buf === 'string' ? buf.slice(start, end) : buf.toString('utf8', start, end));
+      return end - start;
+    };
+    t.after(() => { fs.writeSync = original; });
+    const result = cmdWorktreeBaseCheck('/repo', [], {
+      readFile: () => null,
+      execGit: makeExecGitCheck({
+        'rev-parse HEAD': { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository', signal: null, error: null },
+      }),
+      userClaudeDir: '/nonexistent-hermetic-user-dir',
+      // no deps.write — the default seam under test
+    });
+    assert.ok(fds.length > 0, 'default emit must call fs.writeSync');
+    assert.ok(fds.every((fd) => fd === 1), 'every write must target fd 1 (stdout)');
+    const emitted = chunks.join('');
+    assert.ok(emitted.includes('"reason"'), 'emitted payload is the JSON result');
+    assert.strictEqual(result.reason, 'no-head');
   });
 
   test('diverged shas → shouldDegrade true; captured JSON parses correctly', () => {
@@ -881,9 +1141,11 @@ describe('cmdWorktreeBaseCheck — user/global cascade (#1013)', () => {
   const cwd = '/repo';
   const claudeDir = '/repo/.claude';
 
-  test('(e positive) user/global head + phase lane → shouldDegrade:false (KEY REGRESSION)', () => {
-    // This is the exact bug: user set worktree.baseRef:"head" in their global settings,
-    // but without the fix that setting was invisible and the phase lane triggered degrade.
+  test('(e positive) user/global head + phase lane + orchestrator mode → shouldDegrade:false (KEY REGRESSION #1013)', () => {
+    // This is the exact bug #1013 fixed: user set worktree.baseRef:"head" in their global
+    // settings, but the setting was invisible and the phase lane triggered degrade. The
+    // suppress now applies only where GSD manages the fork (--mode orchestrator-worktree),
+    // which is also what keeps this cascade proof meaningful post-#3659.
     const deps = {
       execGit: makePhaseLaneExecGit(HEAD_SHA),
       readFile: (p) => {
@@ -899,10 +1161,32 @@ describe('cmdWorktreeBaseCheck — user/global cascade (#1013)', () => {
       write: () => {},
       userClaudeDir: USER_CLAUDE_DIR,
     };
-    const result = cmdWorktreeBaseCheck(cwd, [], deps);
+    const result = cmdWorktreeBaseCheck(cwd, ['--mode', 'orchestrator-worktree'], deps);
     assert.strictEqual(result.shouldDegrade, false,
-      'user/global worktree.baseRef:"head" must suppress degrade on a phase lane');
+      'user/global worktree.baseRef:"head" must suppress degrade on a phase lane where GSD manages the fork');
     assert.strictEqual(result.reason, 'baseref-head');
+  });
+
+  test('user/global head + phase lane + default (harness) mode → shouldDegrade:true (#3659)', () => {
+    // The mirror of the KEY REGRESSION row: in harness mode the setting cannot
+    // suppress anything (#48), so the same lane degrades.
+    const deps = {
+      execGit: makePhaseLaneExecGit(HEAD_SHA),
+      readFile: (p) => {
+        if (p === path.join(claudeDir, 'settings.local.json')) return null;
+        if (p === path.join(claudeDir, 'settings.json')) return null;
+        if (p === path.join(USER_CLAUDE_DIR, 'settings.json')) {
+          return JSON.stringify({ worktree: { baseRef: 'head' } });
+        }
+        return null;
+      },
+      write: () => {},
+      userClaudeDir: USER_CLAUDE_DIR,
+    };
+    const result = cmdWorktreeBaseCheck(cwd, [], deps);
+    assert.strictEqual(result.shouldDegrade, true,
+      'harness mode: head must not suppress the lane degrade (#3659)');
+    assert.strictEqual(result.reason, 'fork-ref-unknown');
   });
 
   test('(e negative) NO user/global head + same phase lane → shouldDegrade:true (proves lane degrades)', () => {
@@ -919,3 +1203,199 @@ describe('cmdWorktreeBaseCheck — user/global cascade (#1013)', () => {
     assert.strictEqual(result.reason, 'fork-ref-unknown');
   });
 });
+
+// ─── workflow dispatch-site coverage: worktree.base-check gates (folded from
+// fix-1941-quick-worktree-stale-base.test.cjs and
+// fix-2649-diagnose-issues-worktree-stale-base.test.cjs, #3335) ──────────────
+//
+// allow-test-rule: source-text-is-the-product #1941 #2649
+// Workflow .md files are the installed AI instructions — their text IS what the
+// runtime loads. Testing text content tests the deployed contract. Per
+// CONTRIBUTING.md exception matrix.
+//
+// Root cause shared by #1941 and #2649: Claude Code's isolation="worktree"
+// forks new worktrees from origin/HEAD, not the live local HEAD. When prior
+// local commits advance local HEAD without an intervening `git push`,
+// origin/HEAD stays pinned to a stale ancestor and the executor's
+// worktree_branch_check guard halts with a base-mismatch fatal. The fix ports
+// the worktree.base-check auto-degrade pattern (originally execute-phase
+// #683/#1369) into each not-yet-covered dispatch site: quick.md's
+// single-dispatch path (#1941), and diagnose-issues.md's spawn_agents step
+// plus execute-plan.md's Pattern A single-plan dispatch (#2649, fixed
+// together per that bug's acceptance criterion 5 — same bug class, same
+// one-line gate).
+
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe('folded:fix-1941-quick-worktree-stale-base', () => {
+
+const QUICK_WORKFLOW_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'quick.md');
+
+describe('quick: pre-dispatch worktree base re-check (#1941)', () => {
+  test('workflow file exists', () => {
+    assert.ok(fs.existsSync(QUICK_WORKFLOW_PATH), 'workflows/quick.md should exist');
+  });
+
+  test('Step 6 runs worktree.base-check before capturing EXPECTED_BASE', () => {
+    const content = fs.readFileSync(QUICK_WORKFLOW_PATH, 'utf-8');
+    const step6Idx = content.indexOf('**Step 6: Spawn executor**');
+    const baseCheckIdx = content.indexOf('worktree.base-check', step6Idx);
+    const expectedBaseIdx = content.indexOf('EXPECTED_BASE=$(git rev-parse HEAD)', step6Idx);
+    assert.ok(step6Idx !== -1, '"Step 6: Spawn executor" must exist in quick.md');
+    assert.ok(baseCheckIdx !== -1, 'worktree.base-check must be invoked within Step 6');
+    assert.ok(expectedBaseIdx !== -1, 'EXPECTED_BASE capture must exist within Step 6');
+    assert.ok(
+      baseCheckIdx < expectedBaseIdx,
+      'worktree.base-check must run BEFORE EXPECTED_BASE is captured so the degrade decision reflects the most current local HEAD'
+    );
+  });
+
+  test('degrade check references #1941 for traceability', () => {
+    const content = fs.readFileSync(QUICK_WORKFLOW_PATH, 'utf-8');
+    assert.ok(content.includes('#1941'), 'quick.md must reference #1941');
+  });
+
+  test('degrade check clears BOTH USE_WORKTREES and ISOLATION when shouldDegrade is true', () => {
+    const content = fs.readFileSync(QUICK_WORKFLOW_PATH, 'utf-8');
+    const baseCheckIdx = content.indexOf('worktree.base-check');
+    const block = content.slice(baseCheckIdx, baseCheckIdx + 900);
+    assert.ok(block.includes('shouldDegrade'), 'degrade check must branch on shouldDegrade');
+    // Both must move together (#2652). Dispatch keys on ISOLATION while the prompt
+    // guard and worktree manifest key on USE_WORKTREES; clearing only one dispatches
+    // an isolated executor with no base guard and no manifest, then blocks in cleanup
+    // looking for a manifest that was never initialized.
+    assert.ok(block.includes('USE_WORKTREES=false'), 'degrade must set USE_WORKTREES=false');
+    assert.ok(
+      block.includes('ISOLATION=none'),
+      'degrade must ALSO set ISOLATION=none — dispatch reads ISOLATION, so clearing only ' +
+        'USE_WORKTREES still passes the harness isolation flag (#2652)'
+    );
+  });
+
+  // #2652: this assertion previously required `RUNTIME = "claude"`, encoding the
+  // pre-#2584 premise that worktree isolation is Claude-specific. #2584 replaced
+  // that with the negotiated dispatch.isolation capability, so the guard now keys
+  // on the capability — Cursor also declares harness-worktree.
+  test('degrade check guards on the negotiated capability, not a runtime id', () => {
+    const content = fs.readFileSync(QUICK_WORKFLOW_PATH, 'utf-8');
+    const baseCheckIdx = content.indexOf('worktree.base-check');
+    const block = content.slice(Math.max(0, baseCheckIdx - 300), baseCheckIdx + 200);
+    assert.ok(
+      block.includes('ISOLATION') && block.includes('harness-worktree'),
+      'degrade check must guard on ISOLATION = harness-worktree'
+    );
+    assert.ok(
+      !/\[\s*"\$RUNTIME"\s*=/.test(block),
+      'degrade check must NOT branch on a RUNTIME literal (#2584/#2652)'
+    );
+  });
+
+  test('degrade check names origin/HEAD as the stale fork base', () => {
+    const content = fs.readFileSync(QUICK_WORKFLOW_PATH, 'utf-8');
+    const step6Idx = content.indexOf('**Step 6: Spawn executor**');
+    const nextSection = content.indexOf('\n---', step6Idx);
+    const section = content.slice(step6Idx, nextSection === -1 ? undefined : nextSection);
+    assert.ok(section.includes('origin/HEAD'), 'Step 6 must name origin/HEAD as the stale fork base');
+  });
+});
+
+  });
+}
+
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe('folded:fix-2649-diagnose-issues-worktree-stale-base', () => {
+
+const DIAGNOSE_ISSUES_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'diagnose-issues.md');
+const EXECUTE_PLAN_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-plan.md');
+
+describe('diagnose-issues: pre-dispatch worktree base-check (#2649)', () => {
+  test('workflow file exists', () => {
+    assert.ok(fs.existsSync(DIAGNOSE_ISSUES_PATH), 'workflows/diagnose-issues.md should exist');
+  });
+
+  test('spawn_agents step runs worktree.base-check before the Agent() dispatch', () => {
+    const content = fs.readFileSync(DIAGNOSE_ISSUES_PATH, 'utf-8');
+    const spawnIdx = content.indexOf('<step name="spawn_agents">');
+    assert.ok(spawnIdx !== -1, '"spawn_agents" step must exist in diagnose-issues.md');
+    const baseCheckIdx = content.indexOf('worktree.base-check', spawnIdx);
+    assert.ok(baseCheckIdx !== -1, 'worktree.base-check must be invoked within the spawn_agents step');
+    // The load-bearing invariant is "base-check BEFORE the Agent() dispatch" so the
+    // degrade decision can drop isolation from the spawn. (Where EXPECTED_BASE is
+    // captured relative to the check is cosmetic — the check only reads HEAD, never
+    // mutates it — so assert the real invariant, not a loose disjunction.)
+    const agentIdx = content.indexOf('Agent(', spawnIdx);
+    assert.ok(agentIdx !== -1, 'spawn_agents must contain an Agent() dispatch');
+    assert.ok(
+      baseCheckIdx < agentIdx,
+      'worktree.base-check must run before the Agent() dispatch so the degrade decision can drop isolation from the spawn',
+    );
+  });
+
+  test('verify-only worktree_branch_check backstop remains embedded in the Agent() prompt', () => {
+    // Acceptance criterion #4: the base-check is a PRE-DISPATCH degrade; the
+    // <worktree_branch_check> guard is a POST-FORK fail-closed backstop. Both
+    // layers must survive — a future edit that dropped the backstop embedding
+    // would re-open the silent-stale-base class. Guard its continued presence.
+    const content = fs.readFileSync(DIAGNOSE_ISSUES_PATH, 'utf-8');
+    const spawnIdx = content.indexOf('<step name="spawn_agents">');
+    assert.ok(spawnIdx !== -1, '"spawn_agents" step must exist');
+    assert.ok(
+      content.indexOf('worktree-branch-check.md', spawnIdx) !== -1,
+      'spawn_agents must still materialize the <worktree_branch_check> backstop after the base-check gate (#2649 acceptance criterion 4)',
+    );
+  });
+
+  test('degrade check sets USE_WORKTREES=false when shouldDegrade is true', () => {
+    const content = fs.readFileSync(DIAGNOSE_ISSUES_PATH, 'utf-8');
+    const baseCheckIdx = content.indexOf('worktree.base-check');
+    const block = content.slice(baseCheckIdx, baseCheckIdx + 600);
+    assert.ok(
+      block.includes('shouldDegrade') && block.includes('USE_WORKTREES=false'),
+      'degrade check must override USE_WORKTREES=false when shouldDegrade is true',
+    );
+  });
+
+  test('degrade check references #2649 for traceability', () => {
+    const content = fs.readFileSync(DIAGNOSE_ISSUES_PATH, 'utf-8');
+    assert.ok(content.includes('#2649'), 'diagnose-issues.md must reference #2649');
+  });
+});
+
+describe('execute-plan Pattern A: pre-dispatch worktree base-check (#2649)', () => {
+  test('workflow file exists', () => {
+    assert.ok(fs.existsSync(EXECUTE_PLAN_PATH), 'workflows/execute-plan.md should exist');
+  });
+
+  test('Pattern A runs the worktree base-check before spawning the executor', () => {
+    const content = fs.readFileSync(EXECUTE_PLAN_PATH, 'utf-8');
+    const patternAIdx = content.indexOf('**Pattern A:**');
+    assert.ok(patternAIdx !== -1, '"Pattern A:" must exist in execute-plan.md');
+    // The base-check instruction must appear within the Pattern A description,
+    // before the isolation="worktree" embedding instruction.
+    const patternAEnd = content.indexOf('**Pattern B:**', patternAIdx);
+    const patternA = content.slice(patternAIdx, patternAEnd === -1 ? undefined : patternAEnd);
+    assert.ok(
+      patternA.includes('#2649') && /worktree\.base-check|base-check/.test(patternA),
+      'Pattern A must run the #2649 worktree base-check before dispatching the executor',
+    );
+    assert.ok(
+      patternA.includes('shouldDegrade'),
+      'Pattern A base-check must consult shouldDegrade',
+    );
+  });
+
+  test('Pattern A documents the auto-degrade (drop isolation on shouldDegrade)', () => {
+    const content = fs.readFileSync(EXECUTE_PLAN_PATH, 'utf-8');
+    const patternAIdx = content.indexOf('**Pattern A:**');
+    const patternAEnd = content.indexOf('**Pattern B:**', patternAIdx);
+    const patternA = content.slice(patternAIdx, patternAEnd === -1 ? undefined : patternAEnd);
+    assert.ok(
+      /degrad|sequential/i.test(patternA),
+      'Pattern A must document auto-degrading to sequential mode when shouldDegrade is true',
+    );
+  });
+});
+
+  });
+}

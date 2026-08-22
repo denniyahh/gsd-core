@@ -381,6 +381,39 @@ grammar, the frozen `when=` vocabulary, and fail-closed authoring rules, and
 [ADR-1671](adr/1671-dynamic-context-management-platform.md) (open questions 1 and 2) for why
 in-file markers were chosen over separate fragment files or a sidecar manifest.
 
+### Section Manifest (`src/section-manifest.cts`, ADR-1671 Phases 5 and 6.1)
+
+Two seams turn a workflow's `gsd:section` markers into per-invocation applicability data.
+`scripts/gen-section-manifest.cjs --write` (wired into `build` after `build:lib`, and into
+`lint:generated-sync`) scans `gsd-core/workflows/*.md` and writes the committed
+`gsd-core/workflows/section-manifest.json`, keyed **per workflow** —
+`{workflows: {"<name>": [{id, when, read}]}}` — where `read` is the path of the step file the
+section's body was extracted to. A workflow with no marked sections contributes **no key at
+all**: an absent key means degraded/unknown (the caller reads every section, the safe superset),
+while a key present with an empty array means "computed, nothing applies". The generator reuses
+`parseWorkflowSections` unchanged rather than re-implementing marker parsing, and fails closed
+(`--check`) on a marker naming a step file that does not exist, a step file no marker
+references, or a committed artifact still carrying the pre-6.1 flat `{sections: [...]}` shape.
+
+A separate pure evaluator, `src/section-manifest.cts` (compiled to
+`gsd-core/bin/lib/section-manifest.cjs` per ADR-457), maps one invocation's facts —
+`{flags, phaseNumber, hasPriorPhases}` plus the optional `needsCodebaseMap`, `phaseMvpMode` and
+`worktreesEnabled` booleans — to an included/excluded partition of section ids via
+`selectSections`. `flags` is a `ReadonlySet<string>` of flag tokens; because `parseNamedArgs`
+always materializes a boolean flag key (`false` when the token was absent, never `undefined`),
+presence is **truthiness**, and the init router folds a boolean flag's own `false` into the
+absent sentinel before the facts are built. Per Greenspun's Tenth Rule, the evaluator is a total
+lookup over the frozen 14-atom `when=` vocabulary, never a parser: `WHEN_PREDICATES` is a
+hand-written literal map that never derives a predicate from its atom string, and an
+unrecognized value fails closed rather than being silently excluded. An atom is admitted only
+when it has both a real consuming section and a fact the init seam actually computes — an atom
+without the latter would evaluate `false` forever and silently disable its own section.
+
+`execute-phase.md`'s `partial-wave` and `gap-closure-artifacts` sections — previously inlined
+directly per #2930's pilot — now delegate to dedicated step files under
+`gsd-core/workflows/execute-phase/steps/`, the same pattern the pre-existing `regression-gate`
+section already used.
+
 ### CLI Tools (`gsd-core/bin/`)
 
 Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core/bin/lib/` (see [`docs/INVENTORY.md`](INVENTORY.md#cli-modules) for the authoritative roster):
@@ -512,6 +545,16 @@ When multiple executors run within the same wave, two mechanisms prevent conflic
 1. `--no-verify` commits — Parallel agents skip pre-commit hooks (which can cause build lock contention, e.g., cargo lock fights in Rust projects). The orchestrator runs `git hook run pre-commit` once after each wave completes.
 2. **STATE.md file locking** — All `writeStateMd()` calls use lockfile-based mutual exclusion (`STATE.md.lock` with `O_EXCL` atomic creation). This prevents the read-modify-write race condition where two agents read STATE.md, modify different fields, and the last writer overwrites the other's changes. Includes stale lock detection (10s timeout) and spin-wait with jitter.
 
+#### The STATE.md Write Path
+
+Locking decides *who* writes. A separate contract decides *what survives the write*.
+
+STATE.md carries the same fact in two places — YAML frontmatter and the document body — and the body is authoritative. Every write therefore re-derives frontmatter from the body, which raises the question the write path exists to answer: when a re-derived value disagrees with the one already in frontmatter, which wins?
+
+`FIELD_CLASSIFICATION` (`src/state-transition.cts`) answers it per field, declaring a `preservation` policy — `preserve-when-unchanged`, `preserve-always`, `preserve-if-placeholder`, `derive`, `clear` — that `applyStatePreservation` executes after `syncStateFrontmatter` re-derives.
+
+**[ADR-3408](adr/3408-state-write-path-preservation.md) is the normative contract** for that path: one executor per declared policy, one write seam, and reports computed from what was actually persisted rather than from what the caller intended to write. Where the contract and the code disagree, the code is the defect. It is the write-side counterpart of [ADR-3180](adr/3180-planning-semantic-model-single-owner.md), which gave each read-side derivation a single owner.
+
 ---
 
 ## Data Flow
@@ -556,7 +599,7 @@ ui-phase → UI-SPEC.md (design contract, optional)
 plan-phase
     ├── Research gate (blocks if RESEARCH.md has unresolved open questions)
     ├── Phase Researcher → RESEARCH.md
-    │       └── Package Legitimacy Gate: slopcheck on every package; [SLOP] removed,
+    │       └── Package Legitimacy Gate: registry-API verdict on every package; [SLOP] removed,
     │           [SUS]/[ASSUMED] flagged; Audit table written to RESEARCH.md
     ├── Planner (with reachability check) → PLAN.md files
     │       └── checkpoint:human-verify injected before [ASSUMED]/[SUS] installs;
@@ -746,8 +789,19 @@ The installer (`bin/install.js`, ~10,700 lines) handles:
 5. **Path normalization** — Replaces `~/.claude/` paths with runtime-specific paths
 6. **Settings integration** — Registers hooks in runtime's `settings.json`
 7. **Patch backup** — Since v1.17, backs up locally modified files to `gsd-local-patches/` for `/gsd-update --reapply`
-8. **Manifest tracking** — Writes `gsd-file-manifest.json` for clean uninstall
+8. **Manifest tracking** — Writes `gsd-file-manifest.json` for clean uninstall. The manifest also records which `runtime` and which `scope` (`global`/`local`) wrote it, under a `manifestVersion` schema field, so a reader can answer "which surfaces are installed, at which scopes" without inferring it from the directory the file sits in ([ADR 2866](adr/2866-install-surface-resolution.md), #2872). Manifests written before that carry no such fields and are read without error — no reinstall is required. See [Installer Migrations → File Manifest](installer-migrations.md#file-manifest)
 9. **Uninstall mode** — `--uninstall` removes all GSD files, hooks, and settings
+
+`installRuntimeArtifacts` (`install-engine.cjs`) returns the executed plan it ran — per kind, per
+scope, including on the combined OpenCode/Kilo family path, which previously early-returned `void` —
+rather than being observable only by re-reading disk afterward. Its destination-writing IO (copies,
+removals, snapshot/restore, best-effort cleanup) now routes through an injectable fs seam,
+`install-fs-adapter.cjs`, so a full install can be exercised against a fake adapter with zero real
+destination IO; locating this package's own source tree remains real by design (a destination-fake
+is never seeded with the repo's own paths). Writes stay byte-identical and existing `void`-ignoring
+callers are unaffected. This completes [ADR 58](adr/58-runtime-install-policy-module.md)'s
+`registry → adapter → helpers → cleanup` rollout — the `cleanup` step had not previously landed
+(#2874, epic #2866 Phase 5).
 
 Install-time file moves, stale-artifact cleanup, config rewrites, and user-data
 preservation are governed by the Installer Migration Module. See
@@ -758,6 +812,8 @@ installs, classifying known runtime install surfaces before later migrations
 remove or rewrite anything.
 
 The plan drift guard (`plan_review.source_grounding`) — which verifies symbol references in generated plans against live source before execution — is specified in [ADR 22](adr/22-plan-drift-guard.md).
+
+The same switch gates a second, cross-artifact axis: a fact-drift pass that compares the *same* fact as stated in `ROADMAP.md`, `PLAN.md`, `STATE.md` and `CONTEXT.md` and reports contradictions (a phase status, a success criterion, a requirement ID, a glossary term) with both locations and the authoritative side named. Where the source-grounding axis grounds a plan against code, this one grounds the planning artifacts against each other. It keys on contradicting knowledge rather than similar-looking text, and is advisory only — it never sets `hardBlock` and never contributes to the convergence counts.
 
 ### Platform Handling
 
@@ -822,17 +878,15 @@ The researcher → planner → executor pipeline includes a supply-chain gate ag
 
 | Layer | Component | Action |
 |-------|-----------|--------|
-| Research | `gsd-phase-researcher` | Runs `slopcheck install <pkgs> --json`; writes `## Package Legitimacy Audit` table to RESEARCH.md; strips `[SLOP]` packages before RESEARCH.md is written |
+| Research | `gsd-phase-researcher` | Runs `gsd-tools query package-legitimacy check --ecosystem <npm\|pypi\|crates> <pkgs>`; writes `## Package Legitimacy Audit` table to RESEARCH.md; strips `[SLOP]` packages before RESEARCH.md is written |
 | Planning | `gsd-planner` | Reads Audit table; inserts `checkpoint:human-verify` before any `[ASSUMED]` or `[SUS]` install task; adds `T-{phase}-SC` STRIDE supply-chain row to `<threat_model>` |
 | Execution | `gsd-executor` | RULE 3 excludes package installation from auto-fix scope; failed installs surface as checkpoints, never silent substitutions |
 
-**Claim provenance integration:** Package names discovered via WebSearch are tagged `[ASSUMED]` (not `[VERIFIED]`) regardless of `npm view` result. This extends the existing `[ASSUMED]` / `[VERIFIED]` / `[CITED]` provenance system by enforcing the provenance tag as a hard gate at the install boundary — `[ASSUMED]` always generates a `checkpoint:human-verify` in PLAN.md.
+**Claim provenance integration:** Package names discovered via WebSearch are tagged `[ASSUMED]` (not `[VERIFIED]`) regardless of the registry-API verdict. This extends the existing `[ASSUMED]` / `[VERIFIED]` / `[CITED]` provenance system by enforcing the provenance tag as a hard gate at the install boundary — `[ASSUMED]` always generates a `checkpoint:human-verify` in PLAN.md.
 
-**Ecosystem coverage:** The researcher uses registry-specific verification commands — `npm view` (Node), `pip index versions` (Python), `cargo search` (Rust) — rather than a single generic check. This catches cross-ecosystem hallucination (~9% rate documented in 2025 USENIX research).
+**Ecosystem coverage:** The gate resolves signals directly from each ecosystem's registry API rather than a single generic check — `registry.npmjs.org` + `api.npmjs.org/downloads` (Node), `pypi.org/pypi/<pkg>/json` (Python), the crates.io API (Rust). This catches cross-ecosystem hallucination (~9% rate documented in 2025 USENIX research).
 
-**Graceful degradation:** If `slopcheck` is unavailable, every recommended package is tagged `[ASSUMED]` and gated with a checkpoint. Research and planning proceed; the system never hard-fails on a missing tool dependency.
-
-**External dependency:** `slopcheck` (MIT, pip-installable). If abandoned, the `[ASSUMED]`-gate fallback maintains human-checkpoint coverage.
+**Graceful degradation:** Each registry adapter degrades to null signals (never throws) on a failed lookup; missing signals push a package to `[SUS]`, which is gated behind the same `checkpoint:human-verify` checkpoint as `[ASSUMED]`. Research and planning proceed; the system never hard-fails on a network or tool outage. `slopcheck` is an optional escalate-only adapter — it can only raise a verdict, never lower it, and is not the install-or-degrade gate. No shipped configuration wires it.
 
 ---
 
@@ -846,6 +900,16 @@ For a conceptual overview of how the hook and guard layers fit into the broader 
 - Scans content for prompt injection patterns (role override, instruction bypass, system tag injection)
 - Advisory-only — logs detection, does not block
 - Patterns are inlined (subset of `security.cjs`) for hook independence
+
+**Read Injection Scanner** (`gsd-read-injection-scanner.js`):
+
+- Triggers on `Read` / `WebFetch` / `WebSearch` PostToolUse events
+- Advisory by default; blocks only `HIGH` severity, and only when `security.injection_blocking` is `true`
+- Severity is `LOW` for 1-2 matched patterns, `HIGH` for 3 or more
+- Skips content shorter than 20 characters, and skips excluded paths (`.planning/`, `REVIEW.md`, `CHECKPOINT*`, security/injection docs, and GSD's own staged hook bundle)
+- Rule ids: the `MD-LINK-*` markdown-link rules mirrored from `security.cjs`'s `MARKDOWN_LINK_PATTERNS`, plus `INJECTION-PATTERN`, `INVISIBLE-UNICODE`, and `UNICODE-TAG-BLOCK`
+- Patterns are shared with `gsd-prompt-guard.js` via `hooks/lib/injection-patterns.js` (#3504); the markdown-link list is inlined for hook independence
+- **Output contract:** `hookSpecificOutput` carries both `additionalContext` (the human-readable advisory sentence) and `findings` — an array of `{ ruleId, match }` records naming each rule that fired. `findings` is the structured surface; the advisory is rendered from it, so the two cannot disagree. `match` is `null` for rules with no captured text (`INVISIBLE-UNICODE`, `UNICODE-TAG-BLOCK`). Consumers should read `findings` rather than parsing the advisory text.
 
 **Workflow Guard** (`gsd-workflow-guard.js`):
 

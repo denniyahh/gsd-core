@@ -1,3 +1,9 @@
+// allow-test-rule: structural-regression-guard (#1972)
+// Reads milestone.cjs/phase.cjs/frontmatter.cjs source and parses for bare
+// fs.writeFileSync call sites — a specific code pattern that must not exist
+// to prevent partial-write corruption. Behavioral tests cannot distinguish
+// platformWriteSync from a bare fs.writeFileSync; only source inspection can.
+
 /**
  * Structural regression guard for atomic write usage (#1972).
  *
@@ -80,6 +86,7 @@ describe('atomic write coverage (#1972)', () => {
       //   hand-written: const { platformWriteSync } = require('./shell-command-projection.cjs')
       //   tsc-compiled:  const x = require("./shell-command-projection.cjs"); x.platformWriteSync(...)
       const hasImport =
+        // eslint-disable-next-line local/no-unbounded-quantifier -- parses this repo's own bounded lib/*.cjs source file, not adversarial input
         /platformWriteSync[^)]*\}\s*=\s*require\(['"]\.\/shell-command-projection\.cjs['"]\)/s.test(content) ||
         /require\(['"]\.\/shell-command-projection\.cjs['"]\)/.test(content);
       assert.ok(

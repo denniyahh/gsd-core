@@ -210,6 +210,42 @@ issue:
   fix_hint: "Plan 02 depends on 03, but 03 depends on 02"
 ```
 
+## Dimension 3b: Undeclared / Temporal Coupling
+
+**Question:** Do two same-wave plans depend on each other through shared mutable state or
+execution order without declaring it? Dimension 3 checks *declared* edges and the wave guard
+checks `files_modified` overlap; neither sees an undeclared edge, which under parallel
+execution becomes an intermittent failure nobody can attribute.
+
+**Scope: PLAN pairs, not tasks.** Tasks inside one plan run sequentially and cannot race.
+Compare same-wave plan pairs over the union of their tasks' `<files>` and `<action>`.
+
+**FLAG only when ALL THREE hold** (coupling that is strong *and* non-local — Connascence of
+Execution; strong-but-local coupling inside one plan is fine):
+1. both plans sit in the same wave, and
+2. neither declares `depends_on` on the other, and
+3. their actions name a *specific* shared mutable resource (config key, table/row, migration,
+   env var, singleton, cache) with at least one WRITER, or one names a prerequisite the other
+   produces.
+
+**Do NOT flag:** both sides only READ it, or it is immutable; the pair already overlaps in
+`files_modified` (report that once, on the file axis); the plans sit in a different wave, which
+already orders them; two tasks inside one plan; a vague same-subsystem claim naming no
+resource; incompatible *transformations* of one entity — that is Dimension 9.
+
+**Severity: ALWAYS WARNING, never a blocker.** Coupling is sometimes intentional; the finding
+lets the planner declare the edge, move a plan to a later wave, or justify the pair.
+
+```yaml
+issue:
+  dimension: dependency_correctness
+  severity: warning
+  description: "Plans 02 and 03 are both Wave 1 with no depends_on, but 02 writes config key
+    auth.session_ttl and 03 reads it"
+  plans: ["02", "03"]
+  fix_hint: "Declare depends_on, move 03 to a later wave, or justify either order"
+```
+
 ## Dimension 4: Key Links Planned
 
 **Question:** Are artifacts wired together, not just created in isolation?
@@ -679,6 +715,11 @@ issue:
 2. For each `<automated>` block containing `2>/dev/null || echo` where the result feeds a `[ "$VAR" = ... ]` comparison: BLOCKER.
 3. For each `<automated>` block asserting a specific numeric count not cited as measured in this plan: WARNING.
 
+## Dimension: Verify Command Path Resolvability (#2401)
+
+**Question:** Does each `<automated>` command's target resolve? Consume the supplied
+`{VERIFY_PATHS}` probe, never re-run/hand-reason it: @gsd-core/references/verify-command-path-resolvability.md
+
 ## Dimension: Numeric/Factual Claim Authority (#1480)
 
 **Rule:** RESEARCH.md is produced at research time and may be stale. Numeric claims (test counts, file counts, version numbers) and factual state claims ("feature X is implemented") in RESEARCH.md may not reflect the current codebase. The plan may be more current. RESEARCH.md is authoritative for architectural decisions and constraints — not for measurements.
@@ -714,6 +755,9 @@ Extract from init JSON: `phase_dir`, `phase_number`, `has_plans`, `plan_count`.
 Orchestrator provides CONTEXT.md content in the verification prompt. If provided, parse for locked decisions, discretion areas, deferred ideas.
 
 ```bash
+# #2962: zsh aborts the block on an unmatched for-list glob (nomatch); bash passes it through. nullglob both.
+shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
+
 gsd_run query phase.list-plans "$phase_number"
 # Research / brief artifacts (deterministic listing)
 gsd_run query phase.list-artifacts "$phase_number" --type research
@@ -735,6 +779,9 @@ done
 Use `gsd-tools query` to validate plan structure:
 
 ```bash
+# #2962: zsh aborts the block on an unmatched for-list glob (nomatch); bash passes it through. nullglob both.
+shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
+
 for plan in "$PHASE_DIR"/*-PLAN.md; do
   echo "=== $plan ==="
   PLAN_STRUCTURE=$(gsd_run query verify.plan-structure "$plan")
@@ -820,6 +867,9 @@ Inspect `tasks` in the JSON; open the PLAN in the editor for prose-level review.
 ## Step 6: Verify Dependency Graph
 
 ```bash
+# #2962: zsh aborts the block on an unmatched for-list glob (nomatch); bash passes it through. nullglob both.
+shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
+
 for plan in "$PHASE_DIR"/*-PLAN.md; do
   grep "depends_on:" "$plan"
 done
@@ -1027,6 +1077,7 @@ Plan verification complete when:
 - [ ] Requirement coverage checked (all requirements have tasks)
 - [ ] Task completeness validated (all required fields present)
 - [ ] Dependency graph verified (no cycles, valid references)
+- [ ] Undeclared/temporal coupling checked (same-wave plan pairs, advisory)
 - [ ] Key links checked (wiring planned, not just artifacts)
 - [ ] Scope assessed (within context budget)
 - [ ] must_haves derivation verified (user-observable truths)

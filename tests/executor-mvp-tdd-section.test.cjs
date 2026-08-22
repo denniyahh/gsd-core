@@ -87,6 +87,7 @@ describe('gsd-executor — state.* calls use the named-only router form (#1863 r
     // silently dropping the values. Guard them alongside the executor.
     for (const rel of ['gsd-core/workflows/milestone-summary.md', 'gsd-core/workflows/forensics.md']) {
       const wf = fs.readFileSync(path.join(__dirname, '..', rel), 'utf-8');
+      // eslint-disable-next-line local/no-unbounded-quantifier -- parses maintainer-authored workflow markdown, bounded prose, not adversarial input
       const m = wf.match(/gsd_run query state\.record-session\b(?:[^\r\n]*\\\r?\n)*[^\r\n]*/);
       assert.ok(m, `${rel} must invoke state.record-session`);
       assert.ok(m[0].includes('--stopped-at') && m[0].includes('--resume-file'),
@@ -105,7 +106,9 @@ describe('gsd-executor — state.* calls use the named-only router form (#1863 r
   const { describe: __foldDescribe } = require('node:test');
   __foldDescribe("folded:bug-3097-3099-executor-worktree-path-safety (consolidation epic #1969 B7 #1976)", () => {
 'use strict';
-// allow-test-rule: reads markdown product files (gsd-executor.md, worktree-path-safety.md) to verify structural protocol — not source-grep (see #3097)
+// allow-test-rule: source-text-is-the-product (see #3097)
+// Reads markdown product files (gsd-executor.md, worktree-path-safety.md) to
+// verify structural protocol.
 
 // Regression guards for bug #3097 and #3099.
 //
@@ -190,17 +193,21 @@ describe('bug #3099: absolute-path safety guidance in gsd-executor.md', () => {
     );
   });
 
-  test('execute-phase prompt anchors subagent file paths to project_root before files_to_read (#280)', () => {
-    const filesIdx = executePhaseSrc.indexOf('<files_to_read>');
-    assert.ok(filesIdx !== -1, 'files_to_read block not found in execute-phase.md');
+  test('execute-phase prompt anchors subagent file paths to project_root before required_reading (#280)', () => {
+    // Anchor on the dispatch's PROJECT_ROOT computation, then require the
+    // nearest <required_reading> block to open just before it — the executor
+    // must be told to compute the root BEFORE reading the listed files
+    // (#3423 note: execute-phase carries several such blocks, so a bare
+    // indexOf on the tag can anchor to the wrong one).
+    const prIdx = executePhaseSrc.indexOf('PROJECT_ROOT=$(git rev-parse --show-toplevel');
+    assert.ok(prIdx !== -1, 'executor dispatch must compute PROJECT_ROOT in the prompt');
+    const filesIdx = executePhaseSrc.lastIndexOf('<required_reading>', prIdx);
+    assert.ok(filesIdx !== -1, 'required_reading block not found before the PROJECT_ROOT computation');
+    assert.ok(prIdx - filesIdx < 1800, 'required_reading block must sit adjacent to the PROJECT_ROOT computation');
     const dispatchSnippet = executePhaseSrc.slice(filesIdx, filesIdx + 1800);
     assert.ok(
-      dispatchSnippet.includes('PROJECT_ROOT=$(git rev-parse --show-toplevel'),
-      'executor dispatch must compute PROJECT_ROOT in the prompt before file reads',
-    );
-    assert.ok(
       dispatchSnippet.includes('${PROJECT_ROOT}/'),
-      'executor files_to_read paths must be anchored to ${PROJECT_ROOT}/',
+      'executor required_reading paths must be anchored to ${PROJECT_ROOT}/',
     );
   });
 

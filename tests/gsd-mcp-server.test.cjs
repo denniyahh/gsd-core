@@ -69,6 +69,12 @@ test('tools/call gsd_invoke_command: dispatches to the command hub (point 1); un
 test('tools/call gsd_invoke_command: REGRESSION #2102 — a valid read-only family dispatches for real (not the createHub()-with-no-args UnknownCommand bug)', () => {
   const dir = createTempDir();
   try {
+    // #3217 (ADR-3180 §7.6 rule 4): a free-form ROADMAP.md (no version
+    // token) is COMPLETE scope for windowing (§7.1) — without this, a
+    // bare temp dir has no ROADMAP.md at all (UNREADABLE) and `percent`
+    // is withheld (null), breaking this reachability proxy.
+    fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
     const res = handleMessage(
       { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'gsd_invoke_command', arguments: { family: 'progress', subcommand: 'json' } } },
       { cwd: dir },
@@ -98,8 +104,16 @@ test('tools/call: missing tool name is a JSON-RPC invalid-params error', () => {
   assert.match(res.error.message, /requires string "name"/);
 });
 
+// Previously used 'resources/read' as the example unknown method, but that
+// stopped being unknown once the served catalog shipped in #3072.
+// 'resources/subscribe' is DELIBERATELY not implemented and deliberately NOT
+// advertised in initialize's capabilities, because the server never sends the
+// corresponding notification. So this assertion now pins a real contract --
+// the advertised capability surface and the implemented method surface agree
+// -- rather than an arbitrary method name that a future feature could
+// invalidate the same way.
 test('unknown method: JSON-RPC method-not-found (-32601)', () => {
-  const res = handleMessage({ jsonrpc: '2.0', id: 8, method: 'resources/read' });
+  const res = handleMessage({ jsonrpc: '2.0', id: 8, method: 'resources/subscribe' });
   assert.strictEqual(res.error.code, -32601);
   assert.match(res.error.message, /Method not found/);
 });

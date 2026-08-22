@@ -30,6 +30,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const { cleanup } = require('./helpers.cjs');
+const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
 const GSD_TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
@@ -37,9 +38,7 @@ const GSD_TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs')
 // Inline — NOT modifying tests/helpers.cjs per task rules.
 
 function gitSync(args, cwd) {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' } });
-  if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
-  return r.stdout.trim();
+  return gitOrThrow(args, { cwd, env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' } }).trim();
 }
 
 function initGitRepo(dir) {
@@ -629,10 +628,17 @@ describe('F. Real registry execute:wave:post shape — guard against accidental 
       `ui.safety-gate onError must be 'halt'; got ${uiGate.onError}`);
   });
 
-  test('[happy] real registry: execute:wave:post has no steps and 2 contributions (external-job executor + mempalace capture-problems)', () => {
+  test('[happy] real registry: execute:wave:post has exactly 1 step (#2856 live-dom-uat gsd-dom-verifier, onError:skip) and 2 contributions (external-job executor + mempalace capture-problems)', () => {
     const point = realRegistry.byLoopPoint['execute:wave:post'];
-    assert.strictEqual(point.steps.length, 0,
-      `execute:wave:post steps must be empty; got ${point.steps.length}`);
+    assert.strictEqual(point.steps.length, 1,
+      `execute:wave:post must have exactly 1 step; got ${point.steps.length}`);
+    const [step] = point.steps;
+    assert.strictEqual(step.capId, 'live-dom-uat',
+      `execute:wave:post step capId must be 'live-dom-uat'; got ${step.capId}`);
+    assert.deepStrictEqual(step.ref, { agent: 'gsd-dom-verifier' },
+      `execute:wave:post step ref must be { agent: 'gsd-dom-verifier' }; got ${JSON.stringify(step.ref)}`);
+    assert.strictEqual(step.onError, 'skip',
+      `execute:wave:post step onError must be 'skip'; got ${step.onError}`);
     // #2285: claude-orchestration's dispatch-backend-selector contribution moved
     // from execute:wave:post to execute:wave:pre — wave:post fires AFTER the
     // wave already dispatched inline, too late to select a dispatch backend.

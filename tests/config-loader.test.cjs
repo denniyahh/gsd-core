@@ -569,15 +569,15 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
 const { createTempProject, cleanup } = require('./helpers.cjs');
+const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
 const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
 
 function makeSubRepo(parent, name) {
   const dir = path.join(parent, name);
   fs.mkdirSync(dir, { recursive: true });
-  execFileSync('git', ['init'], { cwd: dir, stdio: 'pipe' });
+  gitOrThrow(['init'], { cwd: dir });
 }
 
 function readConfig(tmpDir) {
@@ -707,8 +707,6 @@ describe('bug #2638 — sub_repos canonical location', () => {
   __foldDescribe("folded:bug-3523-cjs-loadconfig-branching-strategy-warning (consolidation epic #1969 B6 #1975)", () => {
 'use strict';
 
-// allow-test-rule: validates runtime CLI stdout/stderr warning behavior, not source grep (see #3523)
-
 /**
  * Regression tests for #3523 — CJS loadConfig must not emit a false
  * "unknown config key(s)" warning for `branching_strategy` when that key
@@ -742,40 +740,28 @@ const { describe, test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
-const { createTempProject, cleanup, TOOLS_PATH } = require('./helpers.cjs');
-
-const TEST_ENV_BASE = {
-  GSD_SESSION_KEY: '',
-  CODEX_THREAD_ID: '',
-  CLAUDE_SESSION_ID: '',
-  CLAUDE_CODE_SSE_PORT: '',
-  OPENCODE_SESSION_ID: '',
-  GEMINI_SESSION_ID: '',
-  CURSOR_SESSION_ID: '',
-  WINDSURF_SESSION_ID: '',
-  TERM_SESSION_ID: '',
-  WT_SESSION: '',
-  TMUX_PANE: '',
-  ZELLIJ_SESSION_NAME: '',
-  TTY: '',
-  SSH_TTY: '',
-};
+const { createTempProject, cleanup, TOOLS_PATH, TEST_ENV_BASE, installSpawnHome } = require('./helpers.cjs');
+const { runNode } = require('./helpers/process-seam.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 /**
  * Run gsd-tools and return { stdout, stderr, status }.
  * Always captures stderr even when exit code is 0.
  */
 function runWithStderr(args, cwd, env = {}) {
-  const result = spawnSync(process.execPath, [TOOLS_PATH, ...args], {
+  const result = runNode([TOOLS_PATH, ...args], {
     cwd,
-    encoding: 'utf-8',
-    env: { ...process.env, ...TEST_ENV_BASE, ...env },
+    // #3532: pin GSD_HOME to an empty sandbox so a developer's real
+    // ~/.gsd/defaults.json cannot leak shadow-key warnings into children that
+    // these suites assert are stderr-clean (TEST_ENV_BASE only BLANKS the
+    // var; an empty string falls through to the real homedir).
+    env: { ...process.env, ...TEST_ENV_BASE, GSD_HOME: installSpawnHome(), ...env },
+    timeoutMs: PROBE_TIMEOUT_MS,
   });
   return {
     stdout: result.stdout || '',
     stderr: result.stderr || '',
-    status: result.status,
+    status: result.exitCode,
   };
 }
 
@@ -833,7 +819,7 @@ describe('bug-3523 — no warning for legacy top-level branching_strategy', () =
     );
 
     // After migration write-back, config-get should find git.branching_strategy.
-    const result = runWithStderr(['config-get', 'git.branching_strategy'], tmpDir);
+    const result = runWithStderr(['config-get', 'git.branching_strategy', '--raw'], tmpDir);
 
     assert.equal(
       result.status,
@@ -845,8 +831,9 @@ describe('bug-3523 — no warning for legacy top-level branching_strategy', () =
       '',
       `No error should fire when reading migrated branching_strategy (#3523) — got: ${result.stderr}`
     );
-    assert.ok(
-      result.stdout.includes('milestone'),
+    assert.equal(
+      result.stdout.trim(),
+      'milestone',
       `Expected git.branching_strategy to be 'milestone' but got: ${result.stdout}`
     );
   });
@@ -880,6 +867,11 @@ describe('bug-3523 — double-emission reduced to single-emission', () => {
 
     const result = runWithStderr(['resolve-model', 'planner'], tmpDir);
 
+    // allow-test-rule: pending-migration-to-typed-ir [#3090]
+    // Counts occurrences of a sentinel substring in the CLI's human-readable
+    // stderr warning text — no structured "warning count"/warning-list API is
+    // exposed yet; adding one is a production change out of scope here.
+    // Tracked under #3090.
     // Count how many times the sentinel key appears in warnings
     const warningLines = result.stderr
       .split('\n')
@@ -1253,5 +1245,213 @@ describe("loadConfigResolved — corrupt config is distinguishable from absent",
       "configured_empty and not_configured must be distinguishable (ADR-1411 rule 3)");
     assert.equal(res.reason, "configured_empty", "enum value is the wire contract");
     assert.equal(res.degraded, false, "an empty file is not corruption");
+  });
+});
+
+// ─── #2997: phase_id_convention survives config resolution ─────────────────
+
+describe('#2997: phase_id_convention is not silently dropped on a clean read', () => {
+  const { createTempDir } = require('./helpers.cjs');
+  const cfgPath = (dir) => path.join(dir, '.planning', 'config.json');
+
+  test('setting phase_id_convention in config.json survives into the resolved config', () => {
+    const tmpDir = createTempDir('gsd-2997-');
+    try {
+      fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+      fs.writeFileSync(cfgPath(tmpDir), JSON.stringify({ phase_id_convention: 'milestone-prefixed' }), 'utf-8');
+      const res = loadConfigResolved(tmpDir);
+      assert.equal(res.degraded, false, 'read must report as non-degraded');
+      assert.equal(res.config.phase_id_convention, 'milestone-prefixed',
+        `phase_id_convention must survive resolution; got: ${JSON.stringify(res.config.phase_id_convention)}`);
+    } finally { cleanup(tmpDir); }
+  });
+
+  test('phase_id_convention set to null round-trips correctly', () => {
+    const tmpDir = createTempDir('gsd-2997-null-');
+    try {
+      fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+      fs.writeFileSync(cfgPath(tmpDir), JSON.stringify({ phase_id_convention: null }), 'utf-8');
+      const res = loadConfigResolved(tmpDir);
+      assert.equal(res.config.phase_id_convention, null,
+        'null phase_id_convention must round-trip as null');
+    } finally { cleanup(tmpDir); }
+  });
+
+  test('phase_id_convention absent → null in resolved config (no false default)', () => {
+    const tmpDir = createTempDir('gsd-2997-absent-');
+    try {
+      fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+      fs.writeFileSync(cfgPath(tmpDir), JSON.stringify({ commit_docs: true }), 'utf-8');
+      const res = loadConfigResolved(tmpDir);
+      assert.equal(res.config.phase_id_convention, null,
+        'absent phase_id_convention must resolve to null, not undefined');
+    } finally { cleanup(tmpDir); }
+  });
+});
+
+// ─── #3532 (10b): shadowed global-defaults diagnostic ─────────────────────────
+
+// The keys Branch D's _globalBaseCfg demonstrably honors when NO project config
+// exists. Under a project .planning/config.json (Branch A — every real project)
+// the global file is never opened, so each of these set globally is silently
+// inert. `effort` is deliberately absent: the install-time effort sync
+// (readGsdEffectiveEffortConfig) DOES merge the global file, so warning on it
+// would be false for the channel users control via effort sync.
+const GLOBAL_KEYS_SHADOWED_UNDER_PROJECT = [
+  'model_profile', 'commit_docs', 'research', 'plan_checker', 'verifier',
+  'nyquist_validation', 'post_planning_gaps', 'parallelization', 'text_mode',
+  'resolve_model_ids', 'context_window', 'subagent_timeout', 'model_overrides',
+  'models', 'granularity', 'granularities', 'planning', 'dynamic_routing',
+  'fast_mode', 'agent_skills', 'response_language', 'runtime',
+  'model_profile_overrides', 'model_policy',
+];
+
+describe('#3532 shadowed global-defaults warning', () => {
+  let tmpDir;
+  let gsdHome;
+  let stderrLines;
+  let originalStderrWrite;
+  let originalGsdHome;
+
+  beforeEach(() => {
+    tmpDir = makeTempProject('gsd-3532-shadow-');
+    gsdHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3532-home-'));
+    stderrLines = [];
+    originalStderrWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk) => { stderrLines.push(String(chunk)); return true; };
+    originalGsdHome = process.env.GSD_HOME;
+    process.env.GSD_HOME = gsdHome;
+    if (_resetRuntimeWarningCacheForTests) _resetRuntimeWarningCacheForTests();
+  });
+
+  afterEach(() => {
+    process.stderr.write = originalStderrWrite;
+    if (originalGsdHome === undefined) delete process.env.GSD_HOME;
+    else process.env.GSD_HOME = originalGsdHome;
+    if (tmpDir) cleanup(tmpDir);
+    if (gsdHome) cleanup(gsdHome);
+    tmpDir = gsdHome = null;
+  });
+
+  function writeGlobalDefaults(obj) {
+    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+    fs.writeFileSync(
+      path.join(gsdHome, '.gsd', 'defaults.json'),
+      JSON.stringify(obj, null, 2),
+    );
+  }
+
+  test('project config + global model keys -> one warning naming both keys', () => {
+    writeConfig(tmpDir, { model_profile: 'balanced' });
+    writeGlobalDefaults({ model_overrides: { 'gsd-executor': 'haiku' }, model_profile: 'quality' });
+    loadConfigResolved(tmpDir);
+    const warnings = stderrLines.filter(l => l.includes('model_overrides') && l.includes('model_profile'));
+    assert.equal(warnings.length, 1, `expected exactly one shadowed-keys warning, got: ${stderrLines.join('')}`);
+  });
+
+  test('second loadConfig call does not repeat the warning', () => {
+    writeConfig(tmpDir, { model_profile: 'balanced' });
+    writeGlobalDefaults({ model_profile: 'quality' });
+    loadConfigResolved(tmpDir);
+    loadConfigResolved(tmpDir);
+    const warnings = stderrLines.filter(l => l.includes('model_profile') && l.includes('defaults.json'));
+    assert.ok(warnings.length <= 1, `warning emitted more than once: ${warnings.length}`);
+  });
+
+  test('global effort keys do not warn (honored by the install-time effort sync)', () => {
+    writeConfig(tmpDir, { model_profile: 'balanced' });
+    writeGlobalDefaults({ effort: { default: 'low' } });
+    loadConfigResolved(tmpDir);
+    assert.equal(stderrLines.filter(l => l.includes('defaults.json')).length, 0,
+      `effort must not trigger the shadow warning: ${stderrLines.join('')}`);
+  });
+
+  test('absent global defaults never warn', () => {
+    writeConfig(tmpDir, { model_profile: 'balanced' });
+    loadConfigResolved(tmpDir);
+    assert.equal(stderrLines.length, 0, `unexpected warnings: ${stderrLines.join('')}`);
+  });
+
+  test('bare dir without .planning honors global defaults without warning (Branch D)', () => {
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3532-bare-'));
+    try {
+      writeGlobalDefaults({ model_profile: 'quality' });
+      const resolution = loadConfigResolved(bare);
+      assert.equal(resolution.source, 'global-defaults');
+      assert.equal(resolution.config['model_profile'], 'quality');
+      assert.equal(stderrLines.length, 0, `Branch D must not warn: ${stderrLines.join('')}`);
+    } finally {
+      cleanup(bare);
+    }
+  });
+
+  test('unparseable global defaults skip the shadow warning', () => {
+    writeConfig(tmpDir, { model_profile: 'balanced' });
+    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), '{not json');
+    loadConfigResolved(tmpDir);
+    assert.equal(stderrLines.filter(l => l.includes('shadowed')).length, 0);
+  });
+
+  test('present-but-empty project config still shadows', () => {
+    writeConfig(tmpDir, {});
+    writeGlobalDefaults({ model_profile: 'quality' });
+    loadConfigResolved(tmpDir);
+    assert.ok(stderrLines.some(l => l.includes('model_profile')),
+      `empty project config must still warn: ${stderrLines.join('')}`);
+  });
+
+  test('non-resolution global keys do not warn from this check', () => {
+    writeConfig(tmpDir, { model_profile: 'balanced' });
+    writeGlobalDefaults({ __gsd_3532_arbitrary__: true });
+    loadConfigResolved(tmpDir);
+    assert.equal(stderrLines.filter(l => l.includes('__gsd_3532_arbitrary__') && l.includes('shadowed')).length, 0);
+  });
+
+  // Typed-IR parity canary (CONTRIBUTING: assert the exported dedup Set, not
+  // stderr prose — #2674 precedent). Every key Branch D honors must register
+  // as shadowed when set globally under a project config.
+  for (const key of GLOBAL_KEYS_SHADOWED_UNDER_PROJECT) {
+    test(`canary: global "${key}" alone warns under a project config`, () => {
+      writeConfig(tmpDir, { model_profile: 'balanced' });
+      writeGlobalDefaults({ [key]: true });
+      loadConfigResolved(tmpDir);
+      const registered = [...configLoader._warnedShadowedGlobalKeys].some(set => set.split(',').includes(key));
+      assert.ok(registered, `global "${key}" must register as shadowed`);
+    });
+  }
+
+  // The nested alias Branch D honors (workflow.post_planning_gaps fallback in
+  // _globalBaseCfg) is equally shadowed and reports under its dotted name.
+  test('canary: nested workflow.post_planning_gaps warns under a project config', () => {
+    writeConfig(tmpDir, { model_profile: 'balanced' });
+    writeGlobalDefaults({ workflow: { post_planning_gaps: 'extended' } });
+    loadConfigResolved(tmpDir);
+    const registered = [...configLoader._warnedShadowedGlobalKeys].some(set => set.split(',').includes('workflow.post_planning_gaps'));
+    assert.ok(registered, 'nested workflow.post_planning_gaps must register as shadowed');
+  });
+
+  // List parity, both directions: the implementation's exported list (minus
+  // effort) must equal this file's expected list — a key _globalBaseCfg grows
+  // without updating GLOBAL_DEFAULTS_RESOLUTION_KEYS goes silently unwarned,
+  // and a key the export grows without _globalBaseCfg reading makes the
+  // warning lie.
+  test('GLOBAL_DEFAULTS_RESOLUTION_KEYS parity with the expected shadow set', () => {
+    const exported = configLoader.GLOBAL_DEFAULTS_RESOLUTION_KEYS.filter(k => k !== 'effort').sort();
+    const expected = GLOBAL_KEYS_SHADOWED_UNDER_PROJECT.slice().sort();
+    assert.deepEqual(exported, expected,
+      `resolution-key list drifted: exported=${JSON.stringify(exported)} expected=${JSON.stringify(expected)}`);
+  });
+
+  test('_resetRuntimeWarningCacheForTests clears the shadowed-key dedup set', () => {
+    writeConfig(tmpDir, { model_profile: 'balanced' });
+    writeGlobalDefaults({ model_profile: 'quality' });
+    loadConfigResolved(tmpDir);
+    assert.ok(
+      configLoader._warnedShadowedGlobalKeys && configLoader._warnedShadowedGlobalKeys.size > 0,
+      'precondition: a shadowed key must populate the dedup set',
+    );
+    _resetRuntimeWarningCacheForTests();
+    assert.equal(configLoader._warnedShadowedGlobalKeys.size, 0);
   });
 });

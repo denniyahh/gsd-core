@@ -44,7 +44,7 @@ Core package and are stamped with the package version at release (per
 ADR-1244 D6). They are not subject to the consent or integrity-pin flow applied
 to third-party capabilities.
 
-### Feature capabilities (role: feature) — 20
+### Feature capabilities (role: feature) — 22
 
 Feature capabilities extend what the loop does — contributing research,
 planning, execution, verification, or ship artefacts at the loop extension
@@ -63,10 +63,12 @@ points.
 | `gap-analysis` | feature | standard | `>=1.6.0` | `plan:post` | gate | first-party |
 | `graphify` | feature | full | `>=1.6.0` | — | — | first-party |
 | `intel` | feature | full | `>=1.6.0` | `plan:pre` | step | first-party |
+| `live-dom-uat` | feature | full | `>=1.11.0` | `execute:wave:post` | step | first-party |
 | `mempalace` | feature | full | `>=1.6.0` | `discuss:pre`, `discuss:post`, `plan:pre`, `plan:post`, `execute:wave:post`, `verify:post`, `ship:post` | step, contribution | first-party |
 | `nyquist` | feature | full | `>=1.6.0` | `verify:post` | step | first-party |
 | `pattern-mapper` | feature | full | `>=1.6.0` | `plan:pre` | step | first-party |
 | `profile-pipeline` | feature | full | `>=1.6.0` | — | — | first-party |
+| `refactor-trigger` | feature | full | `>=1.10.0` | `execute:post` | step | first-party |
 | `research` | feature | standard | `>=1.6.0` | `plan:pre` | step | first-party |
 | `schema-gate` | feature | full | `>=1.6.0` | `plan:pre` | contribution | first-party |
 | `security` | feature | full | `>=1.6.0` | `plan:pre`, `verify:post`, `ship:pre` | step, contribution, gate | first-party |
@@ -105,7 +107,7 @@ emission), so their extension-point and hook-kind cells are `—`.
 ### Reviewer capabilities (role: reviewer) — 5
 
 Reviewer capabilities declare a cross-AI **reviewer lane** — one external CLI or
-model endpoint `/gsd:review` hands a plan to (ADR-2782 D3). They are not install
+model endpoint `/gsd-review` hands a plan to (ADR-2782 D3). They are not install
 targets: they emit no skills, agents, hooks or surface files, so their
 extension-point and hook-kind cells are `—`. A host that is *also* a reviewer
 (Claude, Codex, Cursor, OpenCode, Qwen, Antigravity) keeps one manifest and

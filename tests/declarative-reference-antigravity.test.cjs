@@ -33,7 +33,8 @@ const { test, before } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { runNode } = require('./helpers/process-seam.cjs');
+const { throwIfFailed } = require('./helpers/git-fixture.cjs');
 
 const {
   profileOf,
@@ -50,9 +51,12 @@ const DESC = path.join(__dirname, '..', 'capabilities', 'antigravity', 'capabili
 const ANTIGRAVITY_CAP = JSON.parse(fs.readFileSync(DESC, 'utf8'));
 const ANTIGRAVITY_AXES = ANTIGRAVITY_CAP.runtime.hostIntegration;
 
+// #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
+const { BUILD_TIMEOUT_MS: BUILD_HOOKS_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+
 // hooks/dist is gitignored and built (mirrors golden-install-parity harness).
 before(() => {
-  execFileSync(process.execPath, [BUILD_SCRIPT], { encoding: 'utf-8', stdio: 'pipe' });
+  throwIfFailed(runNode([BUILD_SCRIPT], { timeoutMs: BUILD_HOOKS_TIMEOUT_MS }), `node ${BUILD_SCRIPT}`);
 });
 
 test('Antigravity classifies as the declarative-cli reference profile (profileOf)', () => {
@@ -170,7 +174,10 @@ test('capabilities/antigravity/capability.json validates — subagentToolkit "fu
 test('antigravity descriptor declares runtime.hostBehaviors (the folded-in behaviors) + the subagentToolkit upgrade', () => {
   const hb = ANTIGRAVITY_CAP.runtime.hostBehaviors;
   assert.ok(hb && typeof hb === 'object');
-  assert.equal(hb.reviewerCli, true);
+  // `reviewerCli` was one of the folded-in behaviors originally; ADR-2782
+  // Phase 7 (#2801) removed the alias — antigravity's reviewer lane is declared
+  // by its `reviewer` body now, not by a boolean in the open hostBehaviors bag.
+  assert.equal(Object.prototype.hasOwnProperty.call(hb, 'reviewerCli'), false);
   assert.equal(hb.projectInstructionFile, 'GEMINI.md');
   assert.equal(hb.noPathRewrite, true);
   assert.equal(hb.hookPathStyle, 'raw');
@@ -425,12 +432,14 @@ describe('/gsd:update detects local Antigravity (.agent / .agents) installs (#50
 
   test('execution_context classifier maps /.agents/ and /.agent/ paths to antigravity (update.md)', () => {
     const hasAgentsClassifierRule =
+      // eslint-disable-next-line local/no-unbounded-quantifier -- parses maintainer-authored update.md workflow, bounded prose, not adversarial input
       /\/\.agents\/[^\r\n]*->[^\r\n]*antigravity/.test(UPDATE_MD);
     assert.ok(
       hasAgentsClassifierRule,
       'update.md classifier must map a `/.agents/` path to the `antigravity` runtime',
     );
     const hasAgentClassifierRule =
+      // eslint-disable-next-line local/no-unbounded-quantifier -- parses maintainer-authored update.md workflow, bounded prose, not adversarial input
       /\/\.agent\/[^\r\n]*->[^\r\n]*antigravity/.test(UPDATE_MD);
     assert.ok(
       hasAgentClassifierRule,

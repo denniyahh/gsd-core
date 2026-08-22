@@ -23,17 +23,22 @@ const { test, before } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { runNode } = require('./helpers/process-seam.cjs');
+const { throwIfFailed } = require('./helpers/git-fixture.cjs');
 
 const { cleanup } = require('./helpers.cjs');
 const { RUNTIME_META, runMinimalInstall, BUILD_SCRIPT, buildInstallTree } = require('./helpers/install-shared.cjs');
+
+// #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
+const { BUILD_TIMEOUT_MS: BUILD_HOOKS_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 // hooks/dist is gitignored and built (DEFECT.HOOKS-DIST-SCOPED-CI). The scoped
 // CI test lane does not run build:hooks, so a real install there emits no hooks/
 // dir — making the harness report "removed (N) hooks/…". Build it idempotently
 // here so the harness is lane-independent (mirrors golden-install-parity.test.cjs).
 before(() => {
-  execFileSync(process.execPath, [BUILD_SCRIPT], { encoding: 'utf-8', stdio: 'pipe' });
+  const r = runNode([BUILD_SCRIPT], { timeoutMs: BUILD_HOOKS_TIMEOUT_MS });
+  throwIfFailed(r, `node ${BUILD_SCRIPT}`);
 });
 
 const UPDATE = process.env.UPDATE_INSTALL_TREE === '1';
@@ -145,4 +150,66 @@ test('install tree — claude (local legacy layout)', async (t) => {
     lines.push('If the change is intentional, run "npm run gen:install-tree" to regenerate the fixtures (works without node --test; humans may also use UPDATE_INSTALL_TREE=1 node --test).');
     assert.deepEqual(actual, fixture, lines.join('\n'));
   }
+});
+
+// ─── #3547: the harness's global install must exercise the REAL config-home shape ───
+//
+// runMinimalInstall's global scope used to pass `--config-dir <root>` where the
+// same <root> was also the sandbox HOME — collapsing configDir onto HOME. A real
+// global install resolves its config home to a STRICT SUBDIRECTORY of $HOME
+// (<HOME>/.claude, <HOME>/.codex, <HOME>/.config/opencode, …), and that is what
+// computePathPrefix's `isGlobal && posixTarget.startsWith(posixHome)` branch
+// needs to emit `$HOME/<suffix>/`-shaped prefixes. Under the collapsed shape the
+// prefix was bare `$HOME/`, so every emitted global artifact referenced
+// `$HOME/gsd-core/…` — a path that exists on no real install — and the entire
+// emitted-artifact apparatus (ADR-2719 differential, install-tree fixtures,
+// 19-family baseline) was structurally blind to drift confined to the real
+// global shape (#3544's fix rewrote 54 includes on live installs with ZERO
+// manifest/fixture diffs).
+
+test('#3547 global harness install uses the real config-home shape (claude)', async (t) => {
+  const { configDir, root } = runMinimalInstall({ runtime: 'claude', scope: 'global' });
+  t.after(() => cleanup(root));
+
+  // Strict-subdirectory shape: <root>/.claude, never the collapsed <root>.
+  assert.equal(configDir, path.join(root, RUNTIME_META.claude.globalSuffix),
+    'global configDir must be the runtime\'s real global dir under the sandbox HOME');
+  assert.ok(path.dirname(configDir) === root, 'configDir must be a direct subdirectory of the sandbox HOME');
+
+  // The deployed contract: emitted agent text references $HOME/.claude/gsd-core/,
+  // never the unsuffixed $HOME/gsd-core/ form (posixNormalized on every platform).
+  const planner = fs.readFileSync(path.join(configDir, 'agents', 'gsd-planner.md'), 'utf-8');
+  assert.match(planner, /\$HOME\/\.claude\/gsd-core\//,
+    'emitted agents must carry the real global prefix shape');
+  assert.doesNotMatch(planner, /\$HOME\/gsd-core\//,
+    'the collapsed bare-$HOME prefix must not appear in real-shape installs');
+});
+
+test('#3547 codex global harness install resolves the .codex subdirectory', async (t) => {
+  const { configDir, root } = runMinimalInstall({ runtime: 'codex', scope: 'global' });
+  t.after(() => cleanup(root));
+  assert.equal(configDir, path.join(root, RUNTIME_META.codex.globalSuffix));
+});
+
+test('#3547 opencode global harness install resolves the XDG subdirectory', async (t) => {
+  const { configDir, root } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });
+  t.after(() => cleanup(root));
+  assert.equal(configDir, path.join(root, '.config', 'opencode'));
+});
+
+test('#3547 local scope configDir unchanged', async (t) => {
+  const { configDir, root } = runMinimalInstall({ runtime: 'claude', scope: 'local' });
+  t.after(() => cleanup(root));
+  assert.equal(configDir, path.join(root, '.claude'),
+    'local installs keep the root/<localDir> shape — untouched by #3547');
+});
+
+test('#3547 unknown runtime global scope fails loudly', () => {
+  // grok is in the capability registry but not RUNTIME_META: a silent
+  // `path.join(root, undefined)` is the #3023 failure mode this guards.
+  assert.throws(
+    () => runMinimalInstall({ runtime: 'grok', scope: 'global' }),
+    /grok|RUNTIME_META/,
+    'a runtime without a known global dir must fail loudly before any install spawns',
+  );
 });

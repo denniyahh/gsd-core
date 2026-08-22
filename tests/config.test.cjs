@@ -1808,7 +1808,7 @@ describe('#3197 — gsd-tools.cjs config-set workflow._auto_chain_active', () =>
 {
   const { describe: __foldDescribe } = require('node:test');
   __foldDescribe("folded:bug-3086-git-create-tag-config-gate (consolidation epic #1969 B2 #1971)", () => {
-// allow-test-rule: workflow-markdown-is-the-runtime-contract (see #3086)
+// allow-test-rule: source-text-is-the-product (see #3086)
 // Justification: complete-milestone.md IS the runtime — the agent reads and
 // follows it directly. Asserting the <config-check> block is present in the
 // markdown is the only way to verify the gate is wired. Per CONTEXT.md L611.
@@ -1884,15 +1884,68 @@ describe('#3086: git.create_tag config key', () => {
     );
   });
 
-  test('D. complete-milestone.md contains <config-check> gate for git.create_tag', () => {
+  test('D. complete-milestone.md gates git_tag behind state:git-create-tag (#2994: <config-check> hoisted into cmdInitCompleteMilestone)', () => {
+    // #2994: the inline <config-check> (`gsd-tools.cjs query config-get
+    // git.create_tag ... || echo "true"`) that used to gate the git_tag step's
+    // own inclusion was hoisted into `detectGitCreateTag` (src/init.cts),
+    // consumed by the new `cmdInitCompleteMilestone` entry point and exposed
+    // as the init-bundle's `git_create_tag` field / the `state:git-create-tag`
+    // when= atom. The workflow markdown no longer contains a literal
+    // <config-check> block or `git.create_tag` string — it gates the whole
+    // git_tag step behind a gsd:section marker instead.
     const content = fs.readFileSync(WORKFLOW_PATH, 'utf8');
     assert.ok(
-      content.includes('git.create_tag'),
-      'complete-milestone.md must reference git.create_tag in a <config-check> block',
+      content.includes('<!-- gsd:section id="git-tag" when="state:git-create-tag" -->'),
+      'complete-milestone.md must gate the git_tag step behind the state:git-create-tag section marker',
     );
     assert.ok(
-      content.includes('<config-check>'),
-      'complete-milestone.md must have a <config-check> block in the git_tag step',
+      content.includes('gsd-core/workflows/complete-milestone/steps/git-tag.md'),
+      'complete-milestone.md must point the git-tag section at its step file',
+    );
+
+    const stepFile = fs.readFileSync(
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'complete-milestone', 'steps', 'git-tag.md'),
+      'utf8',
+    );
+    assert.ok(
+      stepFile.includes('<step name="git_tag">') && stepFile.includes('git tag -a'),
+      'git-tag.md step file must contain the git_tag step body (git tag creation)',
+    );
+  });
+
+  // #3508: behavioral replacement for the `detectGitCreateTag` source-grep
+  // that used to sit here. `detectGitCreateTag` (src/init.cts) is unexported,
+  // but its EFFECT is observable through `init complete-milestone`'s
+  // `git_create_tag` output field (wired at cmdInitCompleteMilestone,
+  // gsd-core/bin/lib/init-command-router.cjs's 'complete-milestone' handler)
+  // -- driving the real CLI with git.create_tag set both ways proves
+  // detectGitCreateTag resolves THAT config key specifically (not just that
+  // config-get does, which tests A/B above already cover) without reading
+  // init.cts's source text.
+  test('D2. init complete-milestone\'s git_create_tag field tracks the git.create_tag config key (behavioral form of detectGitCreateTag)', (t) => {
+    const tmpDir = createTempProject('gsd-3086-detect-git-create-tag-');
+    t.after(() => cleanup(tmpDir));
+
+    const setFalse = runGsdTools(['config-set', 'git.create_tag', 'false'], tmpDir, { HOME: tmpDir });
+    assert.ok(setFalse.success, `config-set git.create_tag false failed:\n${setFalse.error}`);
+
+    const falseResult = runGsdTools(['init', 'complete-milestone'], tmpDir, { HOME: tmpDir });
+    assert.ok(falseResult.success, `init complete-milestone failed:\n${falseResult.error}`);
+    assert.strictEqual(
+      JSON.parse(falseResult.output).git_create_tag,
+      false,
+      'init complete-milestone must report git_create_tag: false once git.create_tag is set false',
+    );
+
+    const setTrue = runGsdTools(['config-set', 'git.create_tag', 'true'], tmpDir, { HOME: tmpDir });
+    assert.ok(setTrue.success, `config-set git.create_tag true failed:\n${setTrue.error}`);
+
+    const trueResult = runGsdTools(['init', 'complete-milestone'], tmpDir, { HOME: tmpDir });
+    assert.ok(trueResult.success, `init complete-milestone failed:\n${trueResult.error}`);
+    assert.strictEqual(
+      JSON.parse(trueResult.output).git_create_tag,
+      true,
+      'init complete-milestone must report git_create_tag: true once git.create_tag is set true',
     );
   });
 });
@@ -2262,16 +2315,18 @@ describe('feat-3210 / H5: enum validation for code_quality.fallow.scope and .pro
   __foldDescribe("folded:bug-3212-execute-phase-stall-safe-resume (consolidation epic #1969 B3 #1972)", () => {
 'use strict';
 
-// allow-test-rule: source-text-is-product [#3212]
+// allow-test-rule: source-text-is-the-product [#3212]
 // The bug is in workflow/config contracts consumed by agents at runtime.
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
-const { spawnSync } = require('node:child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { cleanup } = require('./helpers.cjs');
+const { runNode } = require('./helpers/process-seam.cjs');
+const { toLegacyResult } = require('./helpers/git-fixture.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -2280,10 +2335,11 @@ function read(relativePath) {
 }
 
 function runGsd(args, cwd) {
-  return spawnSync(process.execPath, [path.join(ROOT, 'gsd-core/bin/gsd-tools.cjs'), ...args], {
+  const result = runNode([path.join(ROOT, 'gsd-core/bin/gsd-tools.cjs'), ...args], {
     cwd,
-    encoding: 'utf8',
+    timeoutMs: PROBE_TIMEOUT_MS,
   });
+  return toLegacyResult(result);
 }
 
 describe('bug #3212 execute-phase stall detection and safe resume', () => {

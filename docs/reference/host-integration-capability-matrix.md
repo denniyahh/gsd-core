@@ -48,6 +48,23 @@ consumed verbatim by `gen:capability-registry` and validated by `capability-vali
 | `state` | Filesystem/state I/O capability. |
 | `artifact` | Artifact delivery (skills, commands) surface capability. |
 
+### Trigger precedence (#2871 Phase 2 — adjacent to, not part of, `hostIntegration`)
+
+`runtime.triggerPrecedence` (an ordered list of trigger-bearing kind names, highest priority
+first) is declared as a sibling of `hostIntegration` in `capability.json`'s `runtime` body, not
+inside it — it is not researched per-CLI documentation the way the axes above are, so it carries
+no per-host `Source`/`Evidence` row. Only `commands` and `skills` are members of the vocabulary;
+`agents`/`kimi-agents` are excluded because they are not trigger-bearing (a `/gsd-<name>` a user
+types) — an agent is invoked through named/`subagent_type` dispatch, the separate `dispatch`
+interface point above, never through the `command` interface point. Every shipped runtime
+descriptor declares the same value, `["skills", "commands"]` (skills wins a same-scope collision),
+matching `capability-validator.cjs`'s `DEFAULT_TRIGGER_PRECEDENCE` — the axis is
+required-with-default (absence resolves to that default) so a third-party descriptor authored
+before this phase keeps validating unchanged. `runtime-artifact-layout.cts`'s
+`resolveTriggerSurface` reads it to decide the winner among same-trigger candidates once scope
+rank (Install Scope Module) has already been applied. See CONTEXT.md's Runtime Artifact Layout
+Module entry and `.gsd/phase/feat-2871-trigger-resolution/40-design.md`.
+
 ---
 
 ## claude
@@ -81,6 +98,8 @@ Sources consulted:
 - https://code.claude.com/docs/en/sandboxing
 - Context7 /websites/code_claude
 - Context7 /llmstxt/code_claude_llms_txt
+
+**Cross-scope trigger shadowing and spec-root reachability (#2873, epic #2866 Phase 4, resolving #2218).** GSD's claude `artifactLayout` installs `global=[skills]` and `local=[commands, agents]` (see "Trigger precedence" above). Claude Code's own documented precedence — personal overrides project, and a same-named skill overrides a same-named command — means both rules point the same direction when a user installs both scopes: the global skill always wins the `/gsd-<name>` trigger, and the project-local `.claude/gsd-core/` spec tree the local command correctly points at becomes unreachable through that trigger, silently. GSD Core now (a) detects this at install time and from `/gsd-health` (diagnostic `W028`) and prints which scope wins — an advisory only, exit code unchanged; and (b) for claude at **global** scope only, resolves the winning skill's own workflow-spec `@`-include at runtime rather than pre-expanding it: the skill body carries an explicit imperative instruction that resolves `.claude/gsd-core/workflows/<name>.md` relative to the working directory first, falling back to `~/.claude/gsd-core/workflows/<name>.md` when no local tree exists. This is instruction-following, not the guaranteed inclusion a real `@`-include provides — it costs the agent one file read — and is deliberately confined to this one reference, in this one runtime, at this one scope: the skill's `references/`/`templates/` includes and the local scope's own emission are unchanged. See [Interpret install-shadow warnings](../how-to/interpret-install-shadow-warnings.md) and [Install on your runtime — Claude Code](../how-to/install-on-your-runtime.md#claude-code).
 
 ---
 
@@ -448,7 +467,7 @@ Sources consulted:
 - https://www.codebuddy.ai/docs/cli/settings
 - /websites/codebuddy_cn (Context7)
 
-**EoS migration status (#2098):** Migrated onto the declarative adapter (dogfooded in `tests/declarative-reference-codebuddy.test.cjs`). The two remaining `isCodebuddy` branches in `bin/install.js` — a duplicate `commands/` slash-command output report, and a dead legacy agent-converter dispatch arm (unreachable since codebuddy is in `_DESCRIPTOR_AGENTS_RUNTIMES`) — were folded onto the already-generic `runtime.hostBehaviors.reportCommandsDir` (shared with Cursor) and removed outright; `isCodebuddy` no longer appears as a live read anywhere in `bin/install.js`, `src/runtime-artifact-conversion.cts`, `src/shell-command-projection.cts`, or `src/runtime-name-policy.cts`. Two upgrades land: (1) **extended hook events** — codebuddy's `extendedHookEvents` was previously `[]` (none wired); this PR wires all four — `SubagentStop`/`Stop`/`PreCompact`/`SubagentStart` — into `extendedHookEvents` (mirrors qwen/kimi), so an install now registers all four as hooks in `settings.json` alongside the pre-existing base session/tool events (`SessionStart`/`PreToolUse`/`PostToolUse`); cite https://www.codebuddy.ai/docs/cli/hooks. (2) **`dispatch.background`** — the descriptor already declared `true`, exceeding the `declarative-cli` profile baseline of `false`; the negotiation contract (`negotiateHostCapabilities`) now surfaces that value with no downgrade warning, documenting the legitimate deviation. Note: the CodeBuddy CLI has no background-dispatch frontmatter field on sub-agents (`agentMode`/`enabledAutoRun` are IDE-only per https://www.codebuddy.ai/docs/cli/sub-agents) — background dispatch remains a caller-side invocation parameter (`run_in_background: true`), not a field GSD's agent artifacts emit.
+**EoS migration status (#2098):** Migrated onto the declarative adapter (dogfooded in `tests/declarative-reference-codebuddy.test.cjs`). The two remaining `isCodebuddy` branches in `bin/install.js` — a duplicate `commands/` slash-command output report, and a dead legacy agent-converter dispatch arm (unreachable since codebuddy is in `_DESCRIPTOR_AGENTS_RUNTIMES`) — were folded onto the generic `runtime.hostBehaviors.reportCommandsDir` and removed outright; `isCodebuddy` no longer appears as a live read anywhere in `bin/install.js`, `src/runtime-artifact-conversion.cts`, `src/shell-command-projection.cts`, or `src/runtime-name-policy.cts`. Cursor also used that report flag historically, but retired its parallel command surface in #2644 because Cursor skills already appear in the slash menu. Two upgrades land: (1) **extended hook events** — codebuddy's `extendedHookEvents` was previously `[]` (none wired); this PR wires all four — `SubagentStop`/`Stop`/`PreCompact`/`SubagentStart` — into `extendedHookEvents` (mirrors qwen/kimi), so an install now registers all four as hooks in `settings.json` alongside the pre-existing base session/tool events (`SessionStart`/`PreToolUse`/`PostToolUse`); cite https://www.codebuddy.ai/docs/cli/hooks. (2) **`dispatch.background`** — the descriptor already declared `true`, exceeding the `declarative-cli` profile baseline of `false`; the negotiation contract (`negotiateHostCapabilities`) now surfaces that value with no downgrade warning, documenting the legitimate deviation. Note: the CodeBuddy CLI has no background-dispatch frontmatter field on sub-agents (`agentMode`/`enabledAutoRun` are IDE-only per https://www.codebuddy.ai/docs/cli/sub-agents) — background dispatch remains a caller-side invocation parameter (`run_in_background: true`), not a field GSD's agent artifacts emit.
 
 ---
 
@@ -650,6 +669,8 @@ Documentation gaps:
 
 > **`kimi-code` is a different product from `kimi` above — every axis below is sourced independently.** `kimi` is Moonshot's Python `kimi-cli` (`from kimi_cli.app import KimiCLI`, `~/.kimi/config.toml`, `--work-dir`); `kimi-code` is the TypeScript/Node **Kimi Code CLI** (`~/.kimi-code/config.toml`, `$KIMI_CODE_HOME`, process-cwd, `AgentSwarm`). None of the values here are inherited from the `kimi` section. See `docs/migration/kimi-to-kimi-code.md` for the user-facing split.
 
+**GSD hook destination (#2755):** although `kimi` and `kimi-code` share `hooksSurface: "kimi-hooks-toml"`, they do **not** share a hooks root. GSD writes its `[[hooks]]` block, hook bundle and CommonJS marker into `~/.kimi-code/config.toml` for `kimi-code` (overridable via `KIMI_CODE_HOME`) and into `~/.kimi/config.toml` for `kimi` (overridable via `KIMI_SHARE_DIR`); each product's env var is scoped to that product and does not redirect the other. `resolveKimiHooksTomlDir({ runtime })` in `src/runtime-homes.cts` is the single seam that makes this choice, for both the install and uninstall paths. Until #2755 that function was unparameterized and every `kimi-code` install wrote into Kimi CLI's root, leaving Kimi Code with no hooks — this row is documented explicitly because its absence is what let that go unnoticed.
+
 | Axis | Value | Source | Evidence |
 |---|---|---|---|
 | embeddingMode | declarative | https://github.com/moonshotai/kimi-code/blob/main/docs/en/customization/plugins.md | "Plugins package reusable Kimi Code CLI capabilities into installable units — they can add Agent Skills, automatically load a specified Skill at session start, and declare MCP servers to provide real tool capabilities." A plugin is a `kimi.plugin.json` manifest plus markdown Skills; real tool capability arrives via external MCP processes. No in-process programmatic extension API is documented — the same shape as `codex` above. |
@@ -770,6 +791,8 @@ EoS migration status (#2102 Stage 2, ADR-1239): Stage 1's "in-process `gsd-core`
 
 **Adversarial-review correction (#2102 Stage 2, post-review):** the event bridges above and the `/gsd` tokenizer's `hooks/lib/git-cmd.js` require were DEAD in a real install — Stage 1's `hostBehaviors.skipSharedHooksInstall:true` meant pi shipped NO `hooks/` directory at all, so `runHook('gsd-ensure-canonical-path.js', ...)` etc. always hit the "hook file absent → silent no-op" branch, and the tokenizer always fell back to plain whitespace-splitting. The tests masked this because they run against the dev tree, where `hooks/` genuinely exists. **Fix:** `capabilities/pi/capability.json` no longer sets `skipSharedHooksInstall` — pi is architecturally identical to OpenCode here (`hooksSurface: "none"` + a native extension that spawns the staged hooks), not to Kilo/ZCode (`hooksSurface: "none"` with NO plugin surface, where the same hooks genuinely are dead weight). pi now installs `hooks/` + `hooks/lib/` (27 entries: the same `INSTALLED_HOOK_FILES` set OpenCode gets) alongside `extensions/gsd.js`, verified end-to-end via a real `node bin/install.js --pi --global`/`--local` — `resolveEngineRoot`'s walk-up from the installed extension's own directory finds `ENGINE_ROOT/hooks/{gsd-ensure-canonical-path.js,gsd-workflow-guard.js,gsd-context-monitor.js,lib/git-cmd.js}`, and each bridge/`runHook` call exits 0 against the real installed files. `hooksSurface: "none"` + `configFormat: "none"` + `writesSharedSettings: false` are unaffected — no settings/hooks.json/config.toml is written for pi; the extension spawns hooks by absolute path, not via a config-file hook bus. `tests/fixtures/golden-install-parity/pi.json` grew from 292 → 320 entries (the 28 new `hooks/`/`hooks/lib/` files); `commands/`, `agents/`, `skills/` remain absent (`pluginOnlyInstall` is untouched — it only gates the declarative-markdown surfaces, not hooks). `tests/install-minimal-hooks.test.cjs`'s #1821 suite moved pi from the Kilo/ZCode (no-hooks) group into the OpenCode (ships-hooks) group accordingly.
 
+**Superseded in part (#3023, 2026-08-07):** the bundle's directory NAME became runtime-descriptor-driven (`hostBehaviors.sharedHooksDirName`, default `hooks`); pi sets it to `gsd-hooks` because pi reserves `hooks/` as its deprecated extension directory and `checkDeprecatedExtensionDirs()` in `packages/coding-agent/src/migrations.ts` warns on bare directory existence (no emptiness check, unlike its `tools/` sibling — source read 2026-08-07); the set of staged files and every other negotiated axis is UNCHANGED (`hooksSurface: "none"`, `configFormat: "none"`, `writesSharedSettings: false`, `pluginOnlyInstall` all untouched — only the directory name moved); `pi/gsd.cjs` now resolves the bundle by probing `gsd-hooks` then `hooks` so dev checkouts and half-upgraded trees still work.
+
 ## vscode
 
 > VS Code is the IDE-profile reference host: a Marketplace/VSIX-distributed extension, NOT
@@ -848,4 +871,3 @@ hosts) adds a belt-and-suspenders `maxDepth: 5` ceiling independent of whatever 
 engine enforces natively — there is no separate extension-side "subagent contribution"
 registration API beyond the chat participant + Language Model Tools already registered; VS Code's
 chat engine surfaces them to `#runSubagent` on its own.
-

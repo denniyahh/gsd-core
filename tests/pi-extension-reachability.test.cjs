@@ -6,8 +6,9 @@
  * Proves the pi extension is keystone-WIRED: the registered /gsd command's
  * `handler(args, ctx)` (pi's REAL ExtensionAPI shape — NOT the `execute(ctx)`
  * shape the original #1944 cut used) dispatches through gsd-tools.cjs
- * (subprocess-reuse — dispatchGsdCommand) and returns real output, not just a
- * registration on a mock. This is the "user can invoke X" proof.
+ * (subprocess-reuse — dispatchGsdCommand) and renders real output through
+ * `ctx.ui.notify` (#3456 — Pi discards command-handler return values), not
+ * just a registration on a mock. This is the "user can invoke X" proof.
  *
  * Dispatch is exercised with a real read-only family/subcommand
  * (progress/json) against a real temp project, matching the sibling
@@ -18,6 +19,8 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const gsdPiExtension = require('../pi/gsd.cjs');
 const { _internals } = require('../pi/gsd.cjs');
@@ -57,29 +60,77 @@ test('REACHABILITY: empty args dispatch a working default (gsd-tools.cjs --help)
   assert.equal(parsed.subcommand, undefined);
 });
 
-test('REACHABILITY: the /gsd handler dispatches a real family through gsd-tools.cjs and returns real output (keystone wired)', async () => {
+// #3456: Pi's command dispatcher does `await command.handler(args, ctx);
+// return true;` — it DISCARDS the handler's return value in any shape. The
+// only command-output mechanism Pi consumes is `ctx.ui.notify(message, type)`
+// (earendil-works/pi docs: extensions.md#piregistercommandname-options). The
+// #3097 tests asserted on the discarded return object, so they passed while
+// `/gsd` stayed mute in real Pi. These tests invoke the handler exactly as
+// Pi's dispatcher does (await + discard) and assert the notify side effect.
+function makePiCtx(dir) {
+  const notifications = [];
+  return {
+    ctx: {
+      cwd: dir,
+      ui: {
+        notify(message, type) { notifications.push({ message, type }); },
+      },
+    },
+    notifications,
+  };
+}
+
+test('REACHABILITY: the /gsd handler dispatches a real family through gsd-tools.cjs and renders output via ctx.ui.notify (keystone wired)', async () => {
   const pi = mockPi();
   gsdPiExtension(pi);
   const dir = createTempDir();
   try {
-    const result = await pi._recorded.commands['gsd'].handler('progress json', { cwd: dir });
-    assert.equal(typeof result, 'string', '/gsd handler returns a string result');
-    const parsed = JSON.parse(result);
+    // #3217 (ADR-3180 §7.6 rule 4): a free-form ROADMAP.md (no version
+    // token) is COMPLETE scope for windowing (§7.1) — without this, a
+    // bare temp dir has no ROADMAP.md at all (UNREADABLE) and `percent`
+    // is withheld (null), breaking this reachability proxy.
+    fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
+    const { ctx, notifications } = makePiCtx(dir);
+    // Invoke EXACTLY as Pi's dispatcher does: await, then discard the return.
+    const returned = await pi._recorded.commands['gsd'].handler('progress json', ctx);
+    assert.equal(notifications.length, 1, `/gsd must push exactly one ui.notify; got ${notifications.length}`);
+    assert.equal(notifications[0].type, 'info', 'successful dispatch notifies with type "info"');
+    const parsed = JSON.parse(notifications[0].message);
     assert.equal(typeof parsed.percent, 'number', '/gsd dispatch reached gsd-tools.cjs for real (the engine was reached)');
+    assert.equal(returned, undefined, 'the handler return value is the boundary Pi discards — the output must travel via ctx.ui.notify, not a return (#3456)');
   } finally {
     cleanup(dir);
   }
 });
 
-test('REACHABILITY: an unknown family surfaces a clear GSD error string, not a throw', async () => {
+test('REACHABILITY: an unknown family renders a clear GSD error via ctx.ui.notify, not a throw', async () => {
   const pi = mockPi();
   gsdPiExtension(pi);
   const dir = createTempDir();
   try {
-    const result = await pi._recorded.commands['gsd'].handler('no-such-family-8675309', { cwd: dir });
-    assert.equal(typeof result, 'string');
-    assert.match(result, /GSD error:/);
-    assert.match(result, /no-such-family-8675309|Unknown command/);
+    const { ctx, notifications } = makePiCtx(dir);
+    const returned = await pi._recorded.commands['gsd'].handler('no-such-family-8675309', ctx);
+    assert.equal(notifications.length, 1, `failed dispatch must push exactly one ui.notify; got ${notifications.length}`);
+    assert.equal(notifications[0].type, 'error', 'failed dispatch notifies with type "error"');
+    assert.match(notifications[0].message, /GSD error:/);
+    assert.match(notifications[0].message, /no-such-family-8675309|Unknown command/);
+    assert.equal(returned, undefined, 'the error text must travel via ctx.ui.notify, not the discarded return (#3456)');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('REACHABILITY: the /gsd handler tolerates a ctx without ui (older Pi host) without throwing', async () => {
+  const pi = mockPi();
+  gsdPiExtension(pi);
+  const dir = createTempDir();
+  try {
+    fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
+    // No assert on output — a host without ctx.ui has no renderable channel;
+    // this only proves the handler does not crash such a host.
+    await pi._recorded.commands['gsd'].handler('progress json', { cwd: dir });
   } finally {
     cleanup(dir);
   }
@@ -90,6 +141,11 @@ test('REACHABILITY: the gsd_invoke tool dispatches through the engine and return
   gsdPiExtension(pi);
   const dir = createTempDir();
   try {
+    // #3217 (ADR-3180 §7.6 rule 4): see the /gsd handler reachability test
+    // above — a bare temp dir has no ROADMAP.md (UNREADABLE), withholding
+    // `percent`.
+    fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
     const result = await pi._recorded.tools['gsd_invoke'].execute(
       'call-1',
       { family: 'progress', subcommand: 'json' },

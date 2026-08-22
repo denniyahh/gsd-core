@@ -156,9 +156,12 @@ Skill(skill="gsd-plan-phase", args="{PHASE} {GSD_WS}")
 
 Run plan-phase **inline** (do NOT wrap it in Agent()). The convergence orchestrator runs at depth 0 with Agent available, so inline plan-phase can spawn gsd-planner and gsd-plan-checker at depth 1 — the one level of nesting that works on Claude Code. Wrapping plan-phase in Agent() would push it to depth 1 where the Agent tool is absent, preventing it from spawning any sub-agents. Wait until plan-phase completes and PLAN.md files are committed before continuing.
 
-After plan-phase completes, verify plans were created:
+After plan-phase completes, verify plans were created. This asks "did initial
+planning write files to disk" — a planner-produced-nothing check, not
+outstanding-work counting — so it takes the PHYSICAL set (`plan_count_all`,
+`status: superseded` INCLUDED, #3218):
 ```bash
-PLAN_COUNT=$(ls ${phase_dir}/${padded_phase}-*-PLAN.md 2>/dev/null | wc -l)
+PLAN_COUNT=$(gsd_run query find-phase "${PHASE}" | jq -r '.plan_count_all // 0')
 ```
 
 If PLAN_COUNT == 0: Error — initial planning failed. Exit.
@@ -197,9 +200,50 @@ Your final response MUST include a machine-readable line of exactly this form:
 Where <N> is the integer count of HIGH-severity concerns that REMAIN UNRESOLVED in this cycle's findings.
 Where <M> is the integer count of actionable MEDIUM/LOW concerns that REMAIN UNRESOLVED because the latest PLAN.md files do not yet incorporate them or explicitly defer/reject them.
 
+Consensus gate (applies to NEWLY RAISED HIGHs only; evaluate before the counting rules below):
+  This gate engages ONLY when 2 or more reviewers actually ran and produced a review section this
+  cycle. With exactly one reviewer, skip this entire gate — a single reviewer's HIGH always counts,
+  exactly as before.
+
+  Classify each newly raised HIGH by what the claim ASSERTS, not by whether it happens to contain a
+  file:line citation:
+    - EXISTENCE-CLASS — asserts that a named symbol, file, path, flag, commit, or ID exists,
+      is absent, or says something specific ("X does not exist", "the plan cites Y which is missing",
+      "file Z contains Q").
+    - JUDGMENT-CLASS — asserts a design or correctness property ("no idempotency on retried writes",
+      "race between A and B", "missing rate limit"). A judgment-class HIGH stays judgment-class even
+      when it cites a file for context.
+
+  A HIGH raised by 2+ reviewers is corroborated and always counts.
+
+  For a HIGH raised by exactly ONE reviewer:
+    - EXISTENCE-CLASS — counts only if the source-grounding pass independently confirms it against
+      real project source, or another reviewer raised the same or a materially overlapping concern
+      (i.e. it lands in REVIEWS.md's Consensus Summary "Agreed Concerns").
+    - JUDGMENT-CLASS — counts UNLESS that reviewer's own section OPENS with an evidence-quality
+      discount marker blockquote: `[reviewed-without-source-citations]` or
+      `[reviewed-without-repo-access]`, or the reviewer is a diff-only lane (CodeRabbit). The marker
+      must be the LEADING blockquote of that reviewer's section — a review that merely quotes a
+      marker while discussing it is NOT marked. Corroboration by another reviewer overrides the
+      marker and the HIGH counts.
+
+  Judgment-class findings are deliberately NOT subject to corroboration. Different reviewers catch
+  materially different classes of issue, so requiring two of them to independently raise the same
+  architectural concern would suppress exactly the findings a multi-reviewer setup exists to surface.
+
+  FAIL OPEN: if EVERY reviewer that ran this cycle carries a discount marker, this gate does not
+  apply at all — count as if it were absent. A gate must never manufacture convergence out of a
+  cycle in which nothing was verified.
+
+  A HIGH suppressed by this gate is still listed under "## Current HIGH Concerns", tagged
+  `(single-reviewer, unconfirmed)`. It is excluded from current_high only — never silently dropped,
+  and never removed from the report.
+
+  This gate governs current_high only. current_actionable is unaffected.
+
 Counting rules:
   INCLUDE in the count:
-    - Newly raised HIGHs in this cycle
+    - Newly raised HIGHs in this cycle (subject to the consensus gate above)
     - PARTIALLY RESOLVED HIGHs: concern acknowledged and a mitigation is in progress, but not yet verified/completed
     - Previously raised HIGHs that are still unresolved
 
@@ -253,6 +297,51 @@ Run this pass unless `plan_review.source_grounding` is `false`. It verifies ever
    - `AMBIGUOUS` → MEDIUM. `UNCHECKABLE` → INFO.
    - Signature mismatches cannot be asserted under `grep`/`intel`; report the signature as UNCHECKABLE.
 5. **Coverage block.** Append a "Verification coverage" section to `REVIEWS.md` listing every UNCHECKABLE/skipped symbol and why — a clean review must never silently mean "nothing was checked."
+
+### Cross-artifact fact-drift pass (same gate: `plan_review.source_grounding`)
+
+Run this pass whenever the source-grounding pass ran — it is the second axis of the same drift guard, gated by the same `plan_review.source_grounding` key and adding no config surface of its own. Where source-grounding asks *"does this symbol exist in the source?"*, this asks *"does the project state the same fact in two planning artifacts, and do the two disagree?"* Because each phase runs in a fresh context, an agent typically reads only one artifact and trusts it, so a stale duplicate silently steers it wrong.
+
+**Key on knowledge, not on similar text.** DRY is about a single authoritative representation of a piece of *knowledge*. Two passages that merely read alike, or that restate one fact at different levels of detail, are NOT drift. Only a contradiction is.
+
+1. **Phase status — decided by the seam, not by judgment.** Do not eyeball this axis:
+
+   ```bash
+   DRIFT=$(gsd_run drift-guard phase-status --phase "${PHASE}")
+   # $DRIFT is JSON: {"verdict":"consistent|lag|drifted|uncheckable","stateStatus":…,"roadmapStatus":…}
+   ```
+
+   - `drifted` — STATE.md and ROADMAP.md contradict each other. Report it; the authority is STATE.md.
+   - `lag` — one lifecycle step apart between non-terminal statuses. NOT a finding.
+   - `consistent` — nothing to report.
+   - `uncheckable` — a document was absent or carried a status outside both vocabularies. Record it in the coverage block; never read it as consistent.
+
+   Completeness is terminal: when exactly one side says the phase is complete, the verdict is `drifted` and never `lag`, however few steps apart the two words look.
+
+2. **Pair up the remaining facts by judgment.** The authority column names the source of truth, so a finding can say which side to keep:
+
+   | Fact class | Artifact pair | Authority | Decided by |
+   |---|---|---|---|
+   | Success criteria / must-have truths | ROADMAP.md Success Criteria ↔ PLAN.md `must_haves.truths` | ROADMAP.md | judgment |
+   | Requirement IDs | ROADMAP.md `**Requirements:**` ↔ PLAN.md task requirement refs | ROADMAP.md | judgment |
+   | Phase status | STATE.md status ↔ ROADMAP.md phase state | STATE.md | step 1 (deterministic) |
+   | Glossary / domain term | CONTEXT.md `Decisions` ↔ PLAN.md usage of the term | CONTEXT.md | judgment |
+
+3. **Judge each judgment pair.** FLAG only when ALL THREE hold:
+
+   1. both sides name the *same* fact — same requirement ID, same success criterion, or the same defined term; and
+   2. the two representations *contradict*, one asserting what the other denies, rather than differing in wording or in level of detail; and
+   3. the pair is one of the judgment pairs above.
+
+4. **Record.** Emit each finding into `REVIEWS.md` beside the source-grounding coverage block, quoting both locations and naming the divergence and the authority, so the author can collapse the two copies to a single source of truth.
+
+**Do NOT flag:** a wording-only difference that asserts the same thing; a fact that appears in one artifact only — single-source is the target state, not a finding; a PLAN that ADDS a truth beyond the roadmap Success Criteria, which is sanctioned (plans may add, never subtract); a `lag` verdict from step 1 — two non-terminal statuses a single lifecycle step apart, in either direction, since STATE.md is written at planning time independently of ROADMAP.md and can lead as readily as trail (a disagreement about *completion* is never lag, and step 1 already reports it as `drifted`); anything under CONTEXT.md's `Claude's Discretion` or `Deferred Ideas`, which are non-authoritative by design.
+
+**Report once, not twice — these belong to `gsd-plan-checker`:** a PLAN that omits a roadmap Success Criterion is scope reduction (Dimension 7b); a requirement ID the ROADMAP never defines is requirement coverage (Dimension 1); two PLAN.md files in one phase disagreeing is cross-plan data contracts (Dimension 9).
+
+**Severity: advisory, never a blocker.** This pass never sets `hardBlock`, and its findings contribute to neither `HIGH_COUNT` nor `ACTIONABLE_COUNT` — a project carrying pre-existing drift must still be able to converge, or an advisory check becomes an endless replan loop.
+
+**Coverage, never silence.** If STATE.md or CONTEXT.md is absent, that axis is skipped and the skip is recorded in the same "Verification coverage" block. A clean pass must never mean "nothing was compared."
 
 After agent returns, verify REVIEWS.md exists:
 ```bash

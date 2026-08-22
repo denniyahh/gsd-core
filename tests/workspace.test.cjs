@@ -9,9 +9,11 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
 const { runGsdTools, createTempProject, createTempDir, cleanup } = require('./helpers.cjs');
 const { detectChildRepos } = require('../gsd-core/bin/lib/init.cjs');
+const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+// #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
+const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 // ─── detectChildRepos ────────────────────────────────────────────────────────
 
@@ -32,8 +34,8 @@ describe('detectChildRepos', () => {
     const repo2 = path.join(tmpDir, 'repo-b');
     fs.mkdirSync(repo1);
     fs.mkdirSync(repo2);
-    execSync('git init', { cwd: repo1, stdio: 'pipe' });
-    execSync('git init', { cwd: repo2, stdio: 'pipe' });
+    gitOrThrow(['init'], { cwd: repo1, timeoutMs: GIT_TIMEOUT_MS });
+    gitOrThrow(['init'], { cwd: repo2, timeoutMs: GIT_TIMEOUT_MS });
 
     const repos = detectChildRepos(tmpDir);
     assert.strictEqual(repos.length, 2);
@@ -46,7 +48,7 @@ describe('detectChildRepos', () => {
     const notRepo = path.join(tmpDir, 'just-a-dir');
     fs.mkdirSync(gitRepo);
     fs.mkdirSync(notRepo);
-    execSync('git init', { cwd: gitRepo, stdio: 'pipe' });
+    gitOrThrow(['init'], { cwd: gitRepo, timeoutMs: GIT_TIMEOUT_MS });
 
     const repos = detectChildRepos(tmpDir);
     assert.strictEqual(repos.length, 1);
@@ -56,7 +58,7 @@ describe('detectChildRepos', () => {
   test('skips hidden directories', () => {
     const hiddenRepo = path.join(tmpDir, '.hidden-repo');
     fs.mkdirSync(hiddenRepo);
-    execSync('git init', { cwd: hiddenRepo, stdio: 'pipe' });
+    gitOrThrow(['init'], { cwd: hiddenRepo, timeoutMs: GIT_TIMEOUT_MS });
 
     const repos = detectChildRepos(tmpDir);
     assert.strictEqual(repos.length, 0);
@@ -103,7 +105,7 @@ describe('init new-workspace', () => {
   test('detects child git repos in cwd', () => {
     const repo = path.join(tmpDir, 'my-repo');
     fs.mkdirSync(repo);
-    execSync('git init', { cwd: repo, stdio: 'pipe' });
+    gitOrThrow(['init'], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
 
     const result = runGsdTools('init new-workspace', tmpDir);
     const data = JSON.parse(result.output);
@@ -272,18 +274,18 @@ describe('workspace worktree integration', () => {
     // Create a source git repo with a commit
     sourceRepo = path.join(tmpDir, 'source-repo');
     fs.mkdirSync(sourceRepo);
-    execSync('git init', { cwd: sourceRepo, stdio: 'pipe' });
-    execSync('git config user.email "test@test.com"', { cwd: sourceRepo, stdio: 'pipe' });
-    execSync('git config user.name "Test"', { cwd: sourceRepo, stdio: 'pipe' });
+    gitOrThrow(['init'], { cwd: sourceRepo, timeoutMs: GIT_TIMEOUT_MS });
+    gitOrThrow(['config', 'user.email', 'test@test.com'], { cwd: sourceRepo, timeoutMs: GIT_TIMEOUT_MS });
+    gitOrThrow(['config', 'user.name', 'Test'], { cwd: sourceRepo, timeoutMs: GIT_TIMEOUT_MS });
     fs.writeFileSync(path.join(sourceRepo, 'README.md'), '# Test Repo\n');
-    execSync('git add -A', { cwd: sourceRepo, stdio: 'pipe' });
-    execSync('git commit -m "initial"', { cwd: sourceRepo, stdio: 'pipe' });
+    gitOrThrow(['add', '-A'], { cwd: sourceRepo, timeoutMs: GIT_TIMEOUT_MS });
+    gitOrThrow(['commit', '-m', 'initial'], { cwd: sourceRepo, timeoutMs: GIT_TIMEOUT_MS });
   });
 
   afterEach(() => {
     // Clean up worktrees before removing tmp dir
     try {
-      execSync('git worktree prune', { cwd: sourceRepo, stdio: 'pipe' });
+      gitOrThrow(['worktree', 'prune'], { cwd: sourceRepo, timeoutMs: GIT_TIMEOUT_MS });
     } catch { /* best-effort */ }
     cleanup(tmpDir);
   });
@@ -294,9 +296,9 @@ describe('workspace worktree integration', () => {
     fs.mkdirSync(path.join(wsPath, '.planning'));
 
     // Create worktree
-    execSync(`git worktree add "${path.join(wsPath, 'source-repo')}" -b workspace/test`, {
+    gitOrThrow(['worktree', 'add', path.join(wsPath, 'source-repo'), '-b', 'workspace/test'], {
       cwd: sourceRepo,
-      stdio: 'pipe',
+      timeoutMs: GIT_TIMEOUT_MS,
     });
 
     // Verify worktree was created
@@ -314,8 +316,8 @@ describe('workspace worktree integration', () => {
     fs.mkdirSync(wsPath);
 
     // Clone repo
-    execSync(`git clone "${sourceRepo}" "${path.join(wsPath, 'source-repo')}"`, {
-      stdio: 'pipe',
+    gitOrThrow(['clone', sourceRepo, path.join(wsPath, 'source-repo')], {
+      timeoutMs: GIT_TIMEOUT_MS,
     });
 
     // Verify clone
@@ -332,24 +334,24 @@ describe('workspace worktree integration', () => {
     fs.mkdirSync(wsPath);
 
     // Create worktree
-    execSync(`git worktree add "${path.join(wsPath, 'source-repo')}" -b workspace/removable`, {
+    gitOrThrow(['worktree', 'add', path.join(wsPath, 'source-repo'), '-b', 'workspace/removable'], {
       cwd: sourceRepo,
-      stdio: 'pipe',
+      timeoutMs: GIT_TIMEOUT_MS,
     });
 
     assert.ok(fs.existsSync(path.join(wsPath, 'source-repo', 'README.md')));
 
     // Remove worktree
-    execSync(`git worktree remove "${path.join(wsPath, 'source-repo')}"`, {
+    gitOrThrow(['worktree', 'remove', path.join(wsPath, 'source-repo')], {
       cwd: sourceRepo,
-      stdio: 'pipe',
+      timeoutMs: GIT_TIMEOUT_MS,
     });
 
     // Verify worktree is gone
     assert.ok(!fs.existsSync(path.join(wsPath, 'source-repo')));
 
     // Verify worktree list doesn't include it
-    const worktrees = execSync('git worktree list', { cwd: sourceRepo, encoding: 'utf8' });
+    const worktrees = gitOrThrow(['worktree', 'list'], { cwd: sourceRepo, timeoutMs: GIT_TIMEOUT_MS });
     assert.ok(!worktrees.includes('removable-ws'));
   });
 });
@@ -373,6 +375,7 @@ describe('workspace command files', () => {
     // Strip UTF-8 BOM if present (some editors inject on save under Windows);
     // a BOM byte at offset 0 defeats the ^--- anchor, making fmMatch null.
     const raw = fs.readFileSync(filePath, 'utf8').replace(/^\ufeff/, '');
+    // eslint-disable-next-line local/no-unbounded-quantifier -- parses this repo's own command .md frontmatter, fixed-size author-controlled content
     const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
     assert.ok(fmMatch, `${path.basename(filePath)} must start with a YAML frontmatter block`);
     const fm = {};

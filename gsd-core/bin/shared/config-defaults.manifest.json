@@ -28,6 +28,7 @@
     "verifier": true,
     "nyquist_validation": true,
     "ai_integration_phase": true,
+    "agent_hint_routing": true,
     "human_verify_mode": "end-of-phase",
     "auto_advance": false,
     "_auto_chain_active": false,
@@ -45,6 +46,7 @@
     "context_coverage_gate": true,
     "code_review": true,
     "code_review_depth": "standard",
+    "code_review_depth_overrides": [],
     "code_review_command": null,
     "pattern_mapper": true,
     "plan_bounce": false,
@@ -59,6 +61,7 @@
   },
   "planning": {
     "commit_docs": true,
+    "pr_strict": false,
     "search_gitignored": false,
     "sub_repos": [],
     "granularity": "standard"

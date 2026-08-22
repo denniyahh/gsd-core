@@ -1,4 +1,4 @@
-// allow-test-rule: runtime-contract-is-the-product (see #644) — the prohibition validators and the verify-time
+// allow-test-rule: source-text-is-the-product (see #644) — the prohibition validators and the verify-time
 // disposition are the deployed safety contract; this pins them against the CANONICAL fixture corpus
 // and the ADR-550 D4 "judgment is never silently green" invariant so the code can never drift from
 // its own documented intent again.
@@ -8,7 +8,7 @@
 //           (resolution: null; the checkable content is `statement`). The prior config required a
 //           non-empty `resolution` and threw on 100% of the fixtures.
 //   WR-01 — dispositionForProhibition must NEVER return a silent green for a judgment-tier item,
-//           regardless of enforcement evidence (ADR-550 D4 / verify-phase.md).
+//           regardless of enforcement evidence (ADR-550 D4 / gsd-verifier.md).
 //
 // Fixture-driven on purpose: the validators are exercised against the SAME expected.json files the
 // docs-fixtures parity test pins, so the validator and the corpus can never silently diverge.

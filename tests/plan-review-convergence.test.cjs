@@ -32,6 +32,8 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('node:child_process');
+const { readFileNormalized } = require('./helpers.cjs');
+const fc = require('fast-check');
 
 const COMMAND_PATH = path.join(__dirname, '..', 'commands', 'gsd', 'plan-review-convergence.md');
 const WORKFLOW_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-review-convergence.md');
@@ -72,7 +74,13 @@ function runReviewerFlagsParseBlock(block, args) {
   return execFileSync('bash', ['-c', script], {
     env: { ...process.env, ARGUMENTS: args, GSD_TOOLS_PATH },
     encoding: 'utf8',
-    timeout: 5000,
+    // 30s covers the nested bash → node → gsd-tools.cjs cold-start chain this
+    // helper spawns. 5s was too tight: on a loaded bench (30k tests running
+    // in parallel) that budget was consumed by process-spawn scheduling
+    // latency alone, producing a spurious ETIMEDOUT with no genuine hang.
+    // 30_000 matches the convention other script-invocation tests in this
+    // repo already use (see e.g. adr-index-gate.test.cjs, check-env.test.cjs).
+    timeout: 30_000,
   }).trim();
 }
 
@@ -256,7 +264,15 @@ describe('plan-review-convergence: --agy/--antigravity reviewer whitelist (#2293
 // ─── #2315: bare invocation respects review.default_reviewers ──────────────
 
 describe('plan-review-convergence: #2315 respects review.default_reviewers (no-flag default)', () => {
-  const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+  // readFileNormalized() strips \r\n -> \n before the two behavioral tests
+  // below slice a bash block out of `workflow` and hand it to
+  // execFileSync('bash', ...) — an un-normalized read on a Windows checkout
+  // would break bash mid-script (DEFECT.TEST-SHELL-PIPELINE-NONPORTABLE,
+  // #2650). Those two tests already skip on win32 for an unrelated POSIX-
+  // shell-extraction reason, but `workflow` is shared with non-skipped
+  // structural assertions in this same describe block, so normalizing here
+  // is the single correct fix rather than a per-test patch.
+  const workflow = readFileNormalized(WORKFLOW_PATH);
   const command = fs.readFileSync(COMMAND_PATH, 'utf8');
   const SKILL_PATH = path.join(__dirname, '..', 'skills', 'gsd-plan-review-convergence', 'SKILL.md');
   const skill = fs.readFileSync(SKILL_PATH, 'utf8');
@@ -384,7 +400,10 @@ describe('plan-review-convergence: #2315 respects review.default_reviewers (no-f
       return execFileSync('bash', ['-c', script], {
         env: { ...process.env, ARGUMENTS: args, GSD_TEST_DEFAULT_REVIEWERS: defaultReviewers ?? '', GSD_TOOLS_PATH },
         encoding: 'utf8',
-        timeout: 5000,
+        // 30s covers the same nested bash → node → gsd-tools.cjs cold-start
+        // chain as runReviewerFlagsParseBlock above; see that helper's
+        // comment for why 5s flaked under bench load.
+        timeout: 30_000,
       });
     };
 
@@ -438,7 +457,10 @@ describe('plan-review-convergence: #2315 respects review.default_reviewers (no-f
       return execFileSync('bash', ['-c', script], {
         env: { ...process.env, ARGUMENTS: args, GSD_TEST_DEFAULT_REVIEWERS: defaultReviewers ?? '', GSD_TOOLS_PATH },
         encoding: 'utf8',
-        timeout: 5000,
+        // 30s covers the same nested bash → node → gsd-tools.cjs cold-start
+        // chain as runReviewerFlagsParseBlock above; see that helper's
+        // comment for why 5s flaked under bench load.
+        timeout: 30_000,
       });
     };
 
@@ -531,6 +553,7 @@ describe('plan-review-convergence workflow: config gate (#2306-v2)', () => {
 
   test('workflow defaults config key to false (opt-in, not opt-out)', () => {
     // The config-get call must default to false, not true
+    // eslint-disable-next-line local/no-unbounded-quantifier -- parses maintainer-authored workflow markdown, bounded prose, not adversarial input
     const configGetMatch = workflow.match(/config-get\s+workflow\.plan_review_convergence[^\r\n]*/);
     assert.ok(
       configGetMatch,
@@ -900,6 +923,7 @@ describe('plan-review-convergence CONFIGURATION.md documentation (#2306-v2)', ()
   });
 
   test('CONFIGURATION.md entry documents disabled-by-default behavior', () => {
+    // eslint-disable-next-line local/no-unbounded-quantifier -- parses maintainer-authored docs/CONFIGURATION.md, bounded prose, not adversarial input
     const row = configDoc.match(/workflow\.plan_review_convergence[^\r\n]*/);
     assert.ok(row, 'workflow.plan_review_convergence row must exist in CONFIGURATION.md');
     assert.ok(
@@ -1481,3 +1505,686 @@ describe('bug-936 — plan-review-convergence runs plan-phase inline, not inside
 });
   });
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #1956 — Cross-artifact fact-drift pass (second axis of the plan drift guard)
+//
+// The source-grounding pass answers "does this symbol exist in the source?".
+// This pass answers "does the project state the same FACT in two planning
+// artifacts, and do the two disagree?" — the DRY hazard the issue names, where
+// one copy is updated and the other silently steers a fresh-context agent wrong.
+//
+// ## What this suite locks
+//
+// The deployed contract, plus the two Hyrum contracts that are invisible from
+// the new section itself and would be silently broken by a plausible edit:
+//   1. the pass is ORCHESTRATOR-side, not inside the Agent(prompt=…) string —
+//      the review agent's return message must end with its two "## " sections
+//      and carry no others, because the workflow awk-parses them;
+//   2. the pass can never reach the convergence gate. Convergence is
+//      HIGH_COUNT + ACTIONABLE_COUNT == 0, and the workflow's own ACTIONABLE
+//      definition would otherwise swallow a fact-drift finding — which would
+//      turn an advisory check into an infinite replan loop for any project that
+//      already carries drift.
+//
+// ## What it cannot prove
+//
+// That the model acts on the text. The subject is an LLM prompt; no test in
+// this repo proves behavior for the source-grounding pass either. Stated so the
+// coverage claim is honest rather than implied.
+//
+// The file is read through readFileNormalized, the same LF-normalizing seam the
+// rest of this suite uses, so a CRLF checkout cannot skew the offsets.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('plan-review-convergence: cross-artifact fact-drift pass (#1956)', () => {
+  const WORKFLOW = readFileNormalized(WORKFLOW_PATH);
+
+  const DRIFT_HEADING = /^### Cross-artifact fact-drift pass/m;
+  const GROUNDING_HEADING = /^### Source-grounding pass/m;
+  const AFTER_AGENT_LINE = /^After agent returns, verify REVIEWS\.md exists/m;
+
+  function offsetOf(content, pattern) {
+    const m = content.match(pattern);
+    return m && typeof m.index === 'number' ? m.index : -1;
+  }
+
+  function driftSpan() {
+    const start = offsetOf(WORKFLOW, DRIFT_HEADING);
+    const end = offsetOf(WORKFLOW, AFTER_AGENT_LINE);
+    assert.ok(start >= 0, 'workflow must define a "### Cross-artifact fact-drift pass" heading');
+    assert.ok(end >= 0, 'workflow must retain the "After agent returns…" line that bounds the pass');
+    assert.ok(end > start, 'the fact-drift pass must precede the "After agent returns…" line');
+    return WORKFLOW.slice(start, end);
+  }
+
+  /**
+   * Top-level ordered-list items in a span — the trigger gate's arity, i.e. the
+   * "flag only when ALL N hold" conjunction. Widening it from 3 to 2 is exactly
+   * what turns a precise heuristic into a noise generator, so the COUNT is
+   * asserted rather than the prose.
+   */
+  function countOrderedItems(span) {
+    const matches = span.match(/^\d+\. /gm);
+    return matches ? matches.length : 0;
+  }
+
+  /**
+   * Conjunction clauses — the indented sub-list under step 3's "FLAG only when
+   * ALL THREE hold". Counted separately from the STEPS above because they are
+   * different things: `countOrderedItems` measures the pass's procedure, this
+   * measures the trigger gate's arity. Asserting one while claiming the other
+   * is how a weakened gate slips through a green suite.
+   */
+  function countConjunctionItems(span) {
+    const matches = span.match(/^ {3}\d+\. /gm);
+    return matches ? matches.length : 0;
+  }
+
+  describe('the pass exists and extends the drift guard in place', () => {
+    test('defines a cross-artifact fact-drift pass', () => {
+      const heading = WORKFLOW.match(/^### Cross-artifact fact-drift pass(.*)$/m);
+      assert.ok(heading, 'workflow must define a "### Cross-artifact fact-drift pass" heading');
+    });
+
+    test('the pass extends the drift guard, in place', () => {
+      const grounding = offsetOf(WORKFLOW, GROUNDING_HEADING);
+      const drift = offsetOf(WORKFLOW, DRIFT_HEADING);
+      const after = offsetOf(WORKFLOW, AFTER_AGENT_LINE);
+      assert.ok(grounding >= 0 && drift >= 0 && after >= 0, 'all three anchors must be present');
+      assert.ok(grounding < drift, 'the fact-drift pass must follow the source-grounding pass — it extends it');
+      assert.ok(drift < after, 'the fact-drift pass must sit before the post-agent REVIEWS.md check');
+    });
+
+    test('the pass region is outside the review-agent prompt', () => {
+      // Anchor on the review-agent return contract itself — the sentence inside
+      // the Agent(prompt=…) string that this test exists to protect — rather than
+      // on a generic mode-argument literal that a later Agent() block could reuse
+      // and thereby relocate the anchor past this section.
+      const RETURN_CONTRACT = 'These two sections MUST be the final content of your response';
+      const contractAt = WORKFLOW.indexOf(RETURN_CONTRACT);
+      assert.ok(contractAt >= 0, 'the review agent prompt must still carry its return-message contract');
+      assert.strictEqual(
+        WORKFLOW.indexOf(RETURN_CONTRACT, contractAt + 1),
+        -1,
+        'the return-message contract must appear exactly once — a second copy makes this anchor ambiguous'
+      );
+      assert.ok(
+        offsetOf(WORKFLOW, GROUNDING_HEADING) > contractAt,
+        'source-grounding pass must remain orchestrator-side (after the Agent prompt)'
+      );
+      assert.ok(
+        offsetOf(WORKFLOW, DRIFT_HEADING) > contractAt,
+        'the fact-drift pass must be orchestrator-side — inside the Agent prompt its findings ' +
+        'would break the "no additional ## headings" return contract the workflow parses'
+      );
+    });
+  });
+
+  describe('it adds no config surface', () => {
+    test('the pass is gated on the existing drift-guard key', () => {
+      assert.match(
+        driftSpan(),
+        /plan_review\.source_grounding/,
+        'the fact-drift pass must name plan_review.source_grounding as its gate — issue #1956 ' +
+        'scopes it as an extension of the existing guard, gated by the existing config'
+      );
+    });
+
+    test('the pass introduces no new config key', () => {
+      // The issue's pre-submission checklist asserts the change adds no new
+      // concept, and its breaking-change mitigation reads "gated behind the
+      // EXISTING plan_review config". A third key would also force a 25th
+      // setting into gsd-core/workflows/settings.md's six-section UX.
+      //
+      // Two halves, both required. The gate must still be NAMED — otherwise a
+      // deleted or empty section would satisfy a bare "no novel keys" check
+      // vacuously — and nothing beyond the two keys the drift guard already owns
+      // may appear. (`source_grounding_authority` is resolved through
+      // `gsd_run drift-guard authority` and is not spelled out in this file
+      // today; it stays on the allowed list so naming it later is not a failure.)
+      const keys = new Set([...WORKFLOW.matchAll(/plan_review\.([a-z_]+)/g)].map((m) => m[1]));
+      assert.ok(
+        keys.has('source_grounding'),
+        'the workflow must still name plan_review.source_grounding as the drift-guard gate'
+      );
+      const novel = [...keys]
+        .filter((k) => k !== 'source_grounding' && k !== 'source_grounding_authority')
+        .sort();
+      assert.deepStrictEqual(
+        novel,
+        [],
+        `plan-review-convergence must introduce no new plan_review key, found: ${novel.join(', ')}`
+      );
+    });
+  });
+
+  describe('the trigger gate is a three-way conjunction', () => {
+    test('the pass runs four procedure steps', () => {
+      assert.strictEqual(
+        countOrderedItems(driftSpan()),
+        4,
+        'the fact-drift pass must run four steps (deterministic phase-status, pair up judgment ' +
+        'facts, judge them, record). This counts the PROCEDURE; the trigger gate arity is ' +
+        'counted separately.'
+      );
+    });
+
+    test('the trigger gate enumerates exactly three conditions', () => {
+      assert.strictEqual(
+        countConjunctionItems(driftSpan()),
+        3,
+        'the fact-drift pass must gate on exactly three AND-ed conditions (same fact named on ' +
+        'both sides, the two representations contradict, and the pair is one of the declared ' +
+        'authority pairs). Dropping one widens it into a noise generator; adding one silently ' +
+        'narrows what it can catch.'
+      );
+    });
+
+    test('condition counter fires at 2 / 3 / 4', () => {
+      // The assertion above can only ever observe the real document's arity, so
+      // its inequality branch never executes. Exercise the counter at
+      // limit-1 / limit / limit+1 through the SAME function the guard uses, in
+      // both LF and CRLF form, so a future edit cannot neuter it.
+      const item = (n) => `${n}. condition ${n}`;
+      const indentedItem = (n) => `   ${n}. condition ${n}`;
+      for (const eol of ['\n', '\r\n']) {
+        const spanOf = (count) =>
+          ['### Cross-artifact fact-drift pass', ...Array.from({ length: count }, (_, i) => item(i + 1))]
+            .join(eol);
+        const indentedSpanOf = (count) =>
+          ['### Cross-artifact fact-drift pass', ...Array.from({ length: count }, (_, i) => indentedItem(i + 1))]
+            .join(eol);
+        assert.strictEqual(countOrderedItems(spanOf(2)), 2, `2 items must count as 2 (eol=${JSON.stringify(eol)})`);
+        assert.strictEqual(countOrderedItems(spanOf(3)), 3, `3 items must count as 3 (eol=${JSON.stringify(eol)})`);
+        assert.strictEqual(countOrderedItems(spanOf(4)), 4, `4 items must count as 4 (eol=${JSON.stringify(eol)})`);
+        assert.strictEqual(countConjunctionItems(indentedSpanOf(2)), 2, `2 indented items must count as 2 (eol=${JSON.stringify(eol)})`);
+        assert.strictEqual(countConjunctionItems(indentedSpanOf(3)), 3, `3 indented items must count as 3 (eol=${JSON.stringify(eol)})`);
+        assert.strictEqual(countConjunctionItems(indentedSpanOf(4)), 4, `4 indented items must count as 4 (eol=${JSON.stringify(eol)})`);
+        // The two counters must not see each other's items — a column-0-only
+        // span has no conjunction items, and an indented-only span has no
+        // procedure items.
+        assert.strictEqual(countOrderedItems(indentedSpanOf(3)), 0, `indented-only span must count 0 procedure items (eol=${JSON.stringify(eol)})`);
+        assert.strictEqual(countConjunctionItems(spanOf(3)), 0, `column-0-only span must count 0 conjunction items (eol=${JSON.stringify(eol)})`);
+      }
+    });
+  });
+
+  describe('severity is advisory, and can never gate convergence', () => {
+    test('the finding is advisory and never a blocker', () => {
+      assert.match(
+        driftSpan(),
+        /never\s+a\s+blocker/i,
+        'the fact-drift pass must state that its finding is never a blocker — issue #1956 asks ' +
+        'for an advisory finding, and blocking would strand every project carrying prior drift'
+      );
+    });
+
+    test('the pass can never gate convergence', () => {
+      // Convergence is HIGH_COUNT + ACTIONABLE_COUNT == 0, and the workflow's
+      // own ACTIONABLE definition ("a non-HIGH finding invisible to
+      // execute-phase unless incorporated into PLAN.md") would otherwise
+      // swallow a fact-drift finding — making pre-existing drift an infinite
+      // replan loop. This has to be WRITTEN DOWN, not merely true today.
+      const span = driftSpan();
+      assert.match(span, /HIGH_COUNT/, 'the pass must name HIGH_COUNT when disclaiming the convergence gate');
+      assert.match(span, /ACTIONABLE_COUNT/, 'the pass must name ACTIONABLE_COUNT when disclaiming the convergence gate');
+      assert.match(
+        span,
+        /never sets\s+`?hardBlock/,
+        'the pass must state that it never sets hardBlock — the source-grounding pass uses ' +
+        'hardBlock to stop the review cycle, and this pass must not inherit that'
+      );
+    });
+
+    test('findings land in REVIEWS.md', () => {
+      assert.match(
+        driftSpan(),
+        /REVIEWS\.md/,
+        'the fact-drift pass must write to REVIEWS.md, matching the source-grounding pass — ' +
+        'not to the review agent\'s return message'
+      );
+    });
+
+    test('the phase-status axis is delegated to the deterministic seam', () => {
+      const span = driftSpan();
+      assert.match(
+        span,
+        /gsd_run drift-guard phase-status/,
+        'the phase-status axis must be decided by the drift-guard seam, not by model judgment — ' +
+        'issue #1956 requires a drifted STATE/ROADMAP pair to yield a finding deterministically'
+      );
+      for (const verdict of [/\bdrifted\b/, /\blag\b/, /\buncheckable\b/]) {
+        assert.match(span, verdict, `the pass must say how it treats the ${verdict} verdict`);
+      }
+    });
+  });
+
+  describe('negative space is enumerated', () => {
+    test('the pass keys on knowledge, not similar text', () => {
+      // The maintainer's own research comment on #1956: "The check must key on
+      // 'same knowledge, drifting representations,' not 'similar-looking text,'
+      // or it will produce false positives."
+      const span = driftSpan();
+      assert.match(span, /knowledge/i, 'the pass must frame the check in terms of knowledge');
+      assert.match(
+        span,
+        /contradict/i,
+        'the pass must require a CONTRADICTION, not a resemblance — this is the rule that ' +
+        'keeps it from firing on every restatement'
+      );
+    });
+
+    test('the pass enumerates its non-triggering cases', () => {
+      assert.match(driftSpan(), /Do NOT flag/, 'the fact-drift pass must carry an explicit non-triggering list');
+    });
+
+    test('non-triggering list covers every exclusion class', () => {
+      const span = driftSpan();
+      // Each token is a distinct exclusion class from the design's negative
+      // space. Their absence is what produces the false positives the issue's
+      // research comment warns about.
+      for (const [token, why] of [
+        [/wording/i, 'a wording-only difference asserting the same thing is not drift'],
+        [/single-source/i, 'a fact held in one artifact only is the TARGET state, not a finding'],
+        [/\bADDS\b/, 'a PLAN may ADD truths beyond the roadmap SCs — only subtraction/contradiction counts'],
+        [/lifecycle/i, 'STATE trailing ROADMAP by one lifecycle step is lag, not drift'],
+        [/Deferred Ideas/, 'CONTEXT.md non-authoritative sections must not be compared'],
+      ]) {
+        assert.match(span, token, `the non-triggering list must cover: ${why}`);
+      }
+    });
+
+    test('the pass defers overlapping axes to the plan checker', () => {
+      // Report once, not twice. plan-checker already owns requirement coverage
+      // (D1), scope reduction (D7b) and cross-plan data contracts (D9).
+      const span = driftSpan();
+      for (const dimension of [/Dimension 1\b/, /Dimension 7b\b/, /Dimension 9\b/]) {
+        assert.match(span, dimension, `the pass must defer the overlapping axis to ${dimension}`);
+      }
+    });
+
+    test('a completion disagreement is never exempted as lag', () => {
+      // The issue's canonical example is "complete in STATE.md but in progress
+      // in ROADMAP.md" — one lifecycle step apart, and exactly the case it wants
+      // FLAGGED. An exemption phrased purely as "one step apart" would exempt it.
+      const span = driftSpan();
+      assert.match(
+        span,
+        /completion[^.]*never lag|never lag|Completeness is terminal/i,
+        'the pass must state that a disagreement about completion is never lag'
+      );
+    });
+  });
+
+  describe('authority and coverage', () => {
+    test('the pass names an authority for every artifact pair', () => {
+      const span = driftSpan();
+      for (const artifact of ['ROADMAP.md', 'PLAN.md', 'STATE.md', 'CONTEXT.md']) {
+        assert.ok(
+          span.includes(artifact),
+          `the fact-drift pass must name ${artifact} — issue #1956 spans all four planning artifacts`
+        );
+      }
+      assert.match(
+        span,
+        /Authority/i,
+        'the pass must declare which side of each pair is the source of truth — a finding that ' +
+        'names a divergence without naming the authority cannot be acted on'
+      );
+    });
+
+    test('a skipped axis is recorded, never silent', () => {
+      const span = driftSpan();
+      assert.match(span, /skip(ped)?/i, 'the pass must describe what happens when an artifact is absent');
+      assert.match(
+        span,
+        /coverage/i,
+        'a skipped axis must be recorded in the Verification coverage block — a clean pass must ' +
+        'never silently mean "nothing was compared"'
+      );
+    });
+  });
+
+  describe('independence — the surrounding contracts are unchanged', () => {
+    test('the source-grounding pass keeps its hard block', () => {
+      const start = offsetOf(WORKFLOW, GROUNDING_HEADING);
+      const end = offsetOf(WORKFLOW, DRIFT_HEADING);
+      assert.ok(start >= 0 && end > start, 'source-grounding pass must still precede the fact-drift pass');
+      const groundingSpan = WORKFLOW.slice(start, end);
+      assert.match(
+        groundingSpan,
+        /hardBlock: true/,
+        'the source-grounding pass must keep its hardBlock gating — #1956 is additive and must ' +
+        'not downgrade the existing guard'
+      );
+    });
+
+    test('the review-agent return contract is unchanged', () => {
+      assert.match(
+        WORKFLOW,
+        /no additional "## " headings after them/,
+        'the review agent\'s return-message contract must survive — the workflow awk-parses ' +
+        'those sections and a stray "## " heading breaks escalation-detail extraction'
+      );
+    });
+  });
+
+  describe('docs parity', () => {
+    test('CONFIGURATION.md documents both drift-guard axes', () => {
+      const configDoc = readFileNormalized(CONFIG_DOC_PATH);
+      const row = configDoc
+        .split('\n')
+        .find((l) => l.startsWith('|') && l.includes('`plan_review.source_grounding`'));
+      assert.ok(row, 'docs/CONFIGURATION.md must carry a table row for plan_review.source_grounding');
+      assert.match(
+        row,
+        /cross-artifact|fact drift/i,
+        'the plan_review.source_grounding row must document the second (fact-drift) axis — the ' +
+        'key now gates two checks, and a reader disabling it must know what else goes dark'
+      );
+    });
+
+    test('USER-GUIDE.md documents the second axis', () => {
+      const guide = readFileNormalized(path.join(__dirname, '..', 'docs', 'USER-GUIDE.md'));
+      const start = guide.indexOf('plan_review.source_grounding: true');
+      assert.ok(start >= 0, 'docs/USER-GUIDE.md must retain its Drift Guard section');
+      const section = guide.slice(start, start + 4000);
+      assert.match(
+        section,
+        /cross-artifact|fact drift/i,
+        'the USER-GUIDE Drift Guard section must describe the cross-artifact fact-drift axis'
+      );
+    });
+
+    test('ARCHITECTURE.md documents the second axis', () => {
+      // The issue's Scope of changes names ARCHITECTURE.md explicitly, and its
+      // existing drift-guard paragraph is the one place the architecture doc
+      // describes this guard at all — leaving it single-axis would state, in the
+      // architecture reference, that the guard does less than it does.
+      const arch = readFileNormalized(path.join(__dirname, '..', 'docs', 'ARCHITECTURE.md'));
+      const start = arch.indexOf('The plan drift guard (`plan_review.source_grounding`)');
+      assert.ok(start >= 0, 'docs/ARCHITECTURE.md must retain its plan drift guard paragraph');
+      const section = arch.slice(start, start + 2000);
+      assert.match(
+        section,
+        /cross-artifact|fact-drift/i,
+        'the ARCHITECTURE.md drift-guard paragraph must describe the cross-artifact fact-drift axis'
+      );
+    });
+  });
+});
+
+// ══ #2398 — consensus gate for CYCLE_SUMMARY with multi-reviewer runs ═══════════════════
+//
+// Supersedes PR #2417, which its author closed on the unresolved B2 finding: the approved
+// wording let a lone HIGH count if "the source-grounding pass independently confirms it",
+// but that pass verifies "every symbol THE PLAN cites" — it never takes reviewer claims as
+// input. For a genuine architectural HIGH raised by one reviewer and missed by another:
+// ungroundable, uncorroborated, so it stopped gating. Net effect, in the #2417 review's
+// words: configuring MORE reviewers produced a WEAKER gate than configuring one.
+//
+// The gate therefore splits by what a claim ASSERTS:
+//   - existence/citation-class  -> source-grounding OR corroboration (catches fabricated cites)
+//   - judgment/architectural    -> counts unless the RAISER carries an evidence-quality
+//                                  discount marker  <- this is the B2 fix
+//
+// Linus's Law is the reason: "different reviewers think differently" — demanding two of them
+// independently raise the SAME architectural finding destroys the mechanism a multi-reviewer
+// setup exists for. Its limits clause supplies the other half: "rubber-stamp reviews don't
+// count", and a reviewer that produced no file:line evidence is a rubber-stamp for that cycle.
+//
+// Assertions are on parsed structure and typed sets. The contract SENTENCES are themselves the
+// deliverable (source-text-is-the-product), and carry no allow-test-rule marker deliberately:
+// no-source-grep never inspects .md reads, so a marker suppresses nothing and consumes the
+// ceilinged unverified-marker budget (measured 2026-08-21, 280 -> 281 fails the gate).
+//
+// See https://github.com/open-gsd/gsd-core/issues/2398
+
+const WORKFLOW_2398 = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-review-convergence.md');
+const REVIEWER_INSTANCES_2398 = path.join(__dirname, '..', 'gsd-core', 'references', 'reviewer-instances.md');
+const runner2398 = require('../gsd-core/bin/lib/review-lane-runner.cjs');
+
+const lf2398 = (t) => String(t == null ? '' : t).replace(/\r\n/g, '\n');
+
+function read2398(p) {
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+}
+
+/** The `### 5a` step body, bounded by the next `### ` heading. */
+function step5a2398(text) {
+  const lines = lf2398(text).split('\n');
+  const start = lines.findIndex((l) => /^###\s+5a[.\s]/.test(l));
+  if (start === -1) return '';
+  let end = start + 1;
+  while (end < lines.length && !/^###\s/.test(lines[end])) end += 1;
+  return lines.slice(start, end).join('\n');
+}
+
+/** The consensus-gate block: from its heading to the line before `Counting rules:`. */
+function consensusGate2398(text) {
+  const body = lf2398(text);
+  const gateAt = body.search(/^\s*Consensus gate\b/m);
+  if (gateAt === -1) return '';
+  const countingAt = body.indexOf('Counting rules:', gateAt);
+  return countingAt === -1 ? body.slice(gateAt) : body.slice(gateAt, countingAt);
+}
+
+/** Every `[reviewed-without-*]` marker literal named in `text`, deduped and sorted. */
+function markerNames2398(text) {
+  return [...new Set([...lf2398(text).matchAll(/\[reviewed-without-[a-z-]+\]/g)].map((m) => m[0]))].sort();
+}
+
+/** Ordered positions of the contract landmarks the gate must sit between. */
+function landmarks2398(text) {
+  const body = lf2398(text);
+  return {
+    contract: body.indexOf('IMPORTANT — CYCLE_SUMMARY contract'),
+    gate: body.search(/^\s*Consensus gate\b/m),
+    counting: body.indexOf('Counting rules:'),
+    definitions: body.indexOf('Definitions:'),
+  };
+}
+
+describe('#2398 — consensus gate is declared and correctly positioned', () => {
+  const workflow = read2398(WORKFLOW_2398);
+
+  test('step 5a declares a consensus gate', () => {
+    assert.notEqual(consensusGate2398(step5a2398(workflow)), '', 'no Consensus gate block found in step 5a');
+  });
+
+  test('gate precedes the counting rules it constrains', () => {
+    const at = landmarks2398(step5a2398(workflow));
+    assert.ok(at.contract >= 0 && at.gate >= 0 && at.counting >= 0 && at.definitions >= 0,
+      `missing landmark: ${JSON.stringify(at)}`);
+    assert.ok(at.contract < at.gate, 'gate must sit inside the CYCLE_SUMMARY contract');
+    assert.ok(at.gate < at.counting, 'gate must precede Counting rules, or it constrains nothing');
+    assert.ok(at.counting < at.definitions, 'existing Counting rules -> Definitions order must survive');
+  });
+
+  test('the CYCLE_SUMMARY contract line itself is unchanged', () => {
+    // The orchestrator greps `current_high=[0-9]+` at :320-321. This change alters the NUMBER
+    // the agent computes, never the line's shape — that is the Hyrum-safe boundary.
+    assert.ok(lf2398(workflow).includes('CYCLE_SUMMARY: current_high=<N> current_actionable=<M>'));
+  });
+
+  test('step 5a fences stay balanced', () => {
+    const fences = (lf2398(step5a2398(workflow)).match(/^\s*```/gm) || []).length;
+    assert.equal(fences % 2, 0, `odd fence count (${fences}) in step 5a — a fence was left open`);
+  });
+});
+
+describe('#2398 — gate semantics: the clauses that make it correct', () => {
+  const gate = () => lf2398(consensusGate2398(step5a2398(read2398(WORKFLOW_2398)))).toLowerCase();
+
+  test('gate engages only when 2+ reviewers actually ran', () => {
+    const g = gate();
+    assert.ok(/2\+|two or more|at least two/.test(g), 'gate must state its 2+ reviewer trigger');
+    assert.ok(/\bran\b|produced|returned/.test(g),
+      'trigger must be reviewers that RAN, not merely configured — a failed reviewer must not arm the gate');
+  });
+
+  test('single reviewer is documented as unchanged', () => {
+    assert.ok(/single reviewer|one reviewer|exactly one/.test(gate()),
+      'the single-reviewer no-op is the backward-compatibility promise and must be stated');
+  });
+
+  test('threshold is two, not three', () => {
+    const g = gate();
+    assert.ok(!/three or more|3\+ reviewers/.test(g), 'threshold must be 2, matching the approved scope');
+  });
+
+  // ── the B2 regression ──────────────────────────────────────────────────────────────────
+  test('judgment-class lone HIGH is exempt from corroboration (B2)', () => {
+    const g = gate();
+    assert.ok(/judgment|architectural/.test(g), 'gate must name the judgment/architectural class');
+    assert.ok(/counts?\b[\s\S]{0,200}?(unless|except)[\s\S]{0,200}?marker/.test(g),
+      'a judgment-class lone HIGH must COUNT unless the raiser is marked — if it instead requires '
+      + 'corroboration, B2 is back and more reviewers produce a weaker gate');
+  });
+
+  test('existence-class lone HIGH requires grounding or corroboration', () => {
+    const g = gate();
+    assert.ok(/existence|citation-class|cites a symbol/.test(g), 'gate must name the checkable class');
+    assert.ok(/source-ground/.test(g) && /corroborat/.test(g),
+      'the checkable class keeps both original paths: grounding OR corroboration');
+  });
+
+  test('classification is by assertion, not by citation presence (row 14)', () => {
+    assert.ok(/asserts?\b/.test(gate()),
+      'gate must classify by what the claim ASSERTS — keying on the presence of a file:line '
+      + 'silently reclassifies every architectural finding that cites context, reintroducing B2');
+  });
+
+  test('an all-marked cycle fails open', () => {
+    const g = gate();
+    assert.ok(/every reviewer|all reviewers/.test(g) && /(does not (apply|engage)|fails? open)/.test(g),
+      'if every reviewer is marked the gate must disengage — a gate must never manufacture convergence');
+  });
+
+  test('a suppressed HIGH remains listed and tagged', () => {
+    const g = gate();
+    assert.ok(/current high concerns/.test(g), 'suppressed HIGHs must still be listed');
+    assert.ok(/tag|unconfirmed|single-reviewer/.test(g), 'and must be visibly tagged, not silently dropped');
+  });
+
+  test('gate governs current_high only, and says so explicitly', () => {
+    const g = gate();
+    assert.ok(/current_high/.test(g), 'gate must name the count it governs');
+    // Asserting the gate never MENTIONS current_actionable was the wrong test: stating the
+    // exclusion is what keeps a future editor from quietly widening the gate's reach.
+    assert.ok(/current_actionable is unaffected|does not affect current_actionable|current_actionable is out of scope/.test(g),
+      'gate must state explicitly that current_actionable is out of scope');
+  });
+
+  test('gate keys on a leading marker, not a quoted one', () => {
+    // stampBlindReview's own doc warns a review that merely QUOTES a marker must not be
+    // mis-stamped; the stamp is a LEADING blockquote, so the gate must say so.
+    assert.ok(/leading|opens|begins|first line|blockquote/.test(gate()),
+      'gate must require the marker to OPEN the reviewer section, or a review quoting a marker '
+      + 'gets its own findings suppressed');
+  });
+});
+
+describe('#2398 — marker parity: the gate names markers the runner actually PRODUCES', () => {
+  // Earlier this asserted the marker string appeared somewhere in the runner's SOURCE TEXT.
+  // That would pass even if stampUngroundedReview were broken or never called — string
+  // co-occurrence, not behavior. These invoke the real exported stampers instead.
+
+  /** Markers the runner genuinely emits, observed by calling it. */
+  function emittedMarkers2398() {
+    const observed = new Set();
+    const ungrounded = runner2398.stampUngroundedReview('HIGH: no idempotency on retried writes.');
+    const blind = runner2398.stampBlindReview('REVIEWED-WITHOUT-REPO-ACCESS\nHIGH: something.');
+    for (const stamped of [ungrounded, blind]) {
+      const m = /^> (\[reviewed-without-[a-z-]+\])/.exec(stamped);
+      if (m) observed.add(m[1]);
+    }
+    return [...observed].sort();
+  }
+
+  test('the runner stamps an uncited review, and the marker LEADS the output', () => {
+    const stamped = runner2398.stampUngroundedReview('HIGH: no idempotency on retried writes.');
+    assert.match(stamped, /^> \[reviewed-without-source-citations\]/,
+      'the marker must be the leading blockquote — the gate keys on that position');
+    assert.ok(stamped.includes('HIGH: no idempotency on retried writes.'),
+      'the original review must be preserved beneath the marker');
+  });
+
+  test('the runner does NOT stamp a review carrying a file:line citation', () => {
+    const cited = 'HIGH: see src/a.ts:42 — the race is real.';
+    assert.equal(runner2398.stampUngroundedReview(cited), cited);
+  });
+
+  test('the runner stamps a self-reported blind review', () => {
+    assert.match(
+      runner2398.stampBlindReview('REVIEWED-WITHOUT-REPO-ACCESS\nHIGH: something.'),
+      /^> \[reviewed-without-repo-access\]/,
+    );
+  });
+
+  test('stamping is idempotent — an already-stamped review gains no second marker', () => {
+    const once = runner2398.stampUngroundedReview('bare review');
+    assert.equal(runner2398.stampUngroundedReview(once), once);
+  });
+
+  test('gate names only markers the runner actually produces', () => {
+    const emitted = emittedMarkers2398();
+    const named = markerNames2398(consensusGate2398(step5a2398(read2398(WORKFLOW_2398))));
+    assert.deepEqual(emitted, ['[reviewed-without-repo-access]', '[reviewed-without-source-citations]'],
+      'runner must produce both markers when invoked');
+    assert.ok(named.length >= 1, 'the gate must name at least one concrete marker literal');
+    assert.deepEqual(named.filter((m) => !emitted.includes(m)), [],
+      'gate names a marker the runner never produces — the gate would be inert');
+  });
+
+  test('parity fails when the gate names a marker the runner does not produce', () => {
+    // Non-vacuity: a guard that only reads a correct tree never runs its failure branch.
+    const emitted = emittedMarkers2398();
+    const mutated = markerNames2398('[reviewed-without-source-citations] and [reviewed-without-telemetry]');
+    assert.deepEqual(mutated.filter((m) => !emitted.includes(m)), ['[reviewed-without-telemetry]']);
+  });
+
+  test('parsers are total on empty, whitespace-only and absent input', () => {
+    for (const input of ['', '   \n\t\n ', null, undefined, read2398('/nonexistent/2398.md')]) {
+      assert.equal(step5a2398(input), '');
+      assert.equal(consensusGate2398(input), '');
+      assert.deepEqual(markerNames2398(input), []);
+    }
+  });
+
+  test('parsers are newline-agnostic (CRLF === LF)', () => {
+    for (const p of [WORKFLOW_2398, REVIEWER_INSTANCES_2398]) {
+      const lfText = lf2398(read2398(p));
+      const crlf = lfText.replace(/\n/g, '\r\n');
+      assert.equal(step5a2398(crlf), step5a2398(lfText));
+      assert.deepEqual(markerNames2398(crlf), markerNames2398(lfText));
+    }
+  });
+
+  test('property: parity is strictly sensitive to a marker the runner never produces', () => {
+    const emitted = emittedMarkers2398();
+    fc.assert(
+      fc.property(
+        fc.subarray(emitted, { minLength: 1 }),
+        fc.constantFrom('telemetry', 'network', 'sandbox', 'cache'),
+        (subset, novel) => {
+          assert.deepEqual(markerNames2398(subset.join(' ')).filter((m) => !emitted.includes(m)), []);
+          const withNovel = `${subset.join(' ')} [reviewed-without-${novel}]`;
+          assert.deepEqual(markerNames2398(withNovel).filter((m) => !emitted.includes(m)),
+            [`[reviewed-without-${novel}]`]);
+        },
+      ),
+      { seed: 2398, numRuns: 100 },
+    );
+  });
+});
+
+describe('#2398 — reviewer-instances cross-reference', () => {
+  test('reviewer-instances documents the convergence-gate interaction', () => {
+    const ref = lf2398(read2398(REVIEWER_INSTANCES_2398)).toLowerCase();
+    assert.ok(/consensus gate/.test(ref), 'the reference must name the gate');
+    assert.ok(/plan-review-convergence|current_high/.test(ref),
+      'and must point at where it takes effect, so a reader configuring instances finds it');
+  });
+});

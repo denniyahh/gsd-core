@@ -12,9 +12,8 @@
  *   - surface a timeout (exit 124) with a watch-mode hint — the regression gate
  *     ABORTS, the others surface clearly (never silently ignored).
  *
- * verify-phase's gate was ALREADY bounded (a fixed `run-with-timeout 300`, not a hang), so
- * it only needs the normalizer (so a watch runner exits fast) and keeps its own
- * fixed 5-minute bound — asserted separately below.
+ * verify-phase's gate (a fourth, already-bounded surface) was deleted with its orphan
+ * workflow in #1892; the gates above are the complete live set.
  */
 
 'use strict';
@@ -25,17 +24,22 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
+// #2932: the regression-gate step was split — steps/regression-gate.md now only
+// discovers prior-phase test files and delegates (via "Read and execute") to
+// steps/regression-gate-run.md, which carries the actual command resolution,
+// normalize-test-command call, timeout bound, and watch-mode abort mechanics.
 const REGRESSION_GATE = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'regression-gate.md');
+const REGRESSION_GATE_RUN = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'regression-gate-run.md');
 const POST_MERGE_GATE = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'post-merge-gate.md');
 const AUDIT_FIX = path.join(ROOT, 'gsd-core', 'workflows', 'audit-fix.md');
-const VERIFY_PHASE = path.join(ROOT, 'gsd-core', 'workflows', 'verify-phase.md');
 const EXECUTE_PHASE = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase.md');
 
 function read(p) { return fs.readFileSync(p, 'utf-8'); }
 
 // The three gates that were unbounded/silently-continued: full normalize + configured timeout.
+// Regression gate's mechanics now live in the delegated regression-gate-run.md (#2932).
 const FULL_GATES = [
-  ['regression gate', REGRESSION_GATE],
+  ['regression gate', REGRESSION_GATE_RUN],
   ['post-merge gate', POST_MERGE_GATE],
   ['audit-fix gate', AUDIT_FIX],
 ];
@@ -60,18 +64,7 @@ describe('#1857: test gates normalize to one-shot and bound with a timeout', () 
     });
   }
 
-  // verify-phase is already bounded (fixed `run-with-timeout 300`, not a hang); it only
-  // needs the normalizer so a watch runner exits fast, and names watch mode on 124.
-  describe('verify-phase gate (already bounded — normalize-only)', () => {
-    test('routes the resolved command through the shared normalize-test-command helper', () => {
-      assert.match(read(VERIFY_PHASE), /normalize-test-command/, 'verify-phase must call the shared normalize-test-command helper');
-    });
-    test('surfaces its fixed timeout (exit 124) naming watch/dev mode', () => {
-      const c = read(VERIFY_PHASE);
-      assert.match(c, /-eq 124/, 'verify-phase must handle the timeout exit code (124)');
-      assert.match(c, /watch\/dev mode/, 'verify-phase must name watch/dev mode as the likely cause on timeout');
-    });
-  });
+  // verify-phase's normalize-only block was removed with the orphan workflow (#1892).
 
   test('the regression gate ABORTS (halts) on a watch-mode timeout', () => {
     const c = read(REGRESSION_GATE);
@@ -86,7 +79,7 @@ describe('#1857: test gates normalize to one-shot and bound with a timeout', () 
   test('the gates share ONE normalizer — the helper is a single source of truth', () => {
     // The behaviour lives in src/normalize-test-command.cts; every gate invokes it
     // by the same verb name, so a change to watch-defeat logic touches one place.
-    for (const file of [REGRESSION_GATE, POST_MERGE_GATE, AUDIT_FIX, VERIFY_PHASE]) {
+    for (const file of [REGRESSION_GATE_RUN, POST_MERGE_GATE, AUDIT_FIX]) {
       assert.match(read(file), /gsd_run query normalize-test-command/);
     }
   });
@@ -101,16 +94,16 @@ describe('#1857: test gates normalize to one-shot and bound with a timeout', () 
 // first build file). Every gate that resolves a build/test command this way MUST
 // pass `--raw` so an unset key is a genuinely empty bash string the `-z` guard
 // catches. This is a defect CLASS — post-merge-gate.md was the reported instance,
-// but regression-gate.md, verify-phase.md, and audit-fix.md shared it, so the
-// guard sweeps all of them (a single-file check gave false confidence). config-get's
+// but regression-gate.md and audit-fix.md shared it, so the guard sweeps them (a
+// single-file check gave false confidence; the fourth original member,
+// verify-phase.md, was deleted as an orphan in #1892). config-get's
 // own `--raw` behaviour is covered in config-get-default.test.cjs.
 describe('#2350: every gate resolves build/test commands with --raw', () => {
   // Each gate file that reads workflow.build_command / workflow.test_command to
   // build a shell command it then runs. Add new gates here as they appear.
   const GATE_FILES = [
     ['post-merge gate', POST_MERGE_GATE],
-    ['regression gate', REGRESSION_GATE],
-    ['verify-phase gate', VERIFY_PHASE],
+    ['regression gate', REGRESSION_GATE_RUN],
     ['audit-fix gate', AUDIT_FIX],
   ];
 

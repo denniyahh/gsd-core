@@ -185,7 +185,7 @@ Pesquisa, planeja e verifica uma fase.
 - Com `--view`: imprime o RESEARCH.md existente no stdout, sem criar agente. Apresenta erro se RESEARCH.md estiver ausente.
 
 **Portão de Legitimidade de Pacotes (v1.42.1):**
-Quando o pesquisador recomenda pacotes externos, executa `slopcheck install <pkg> --json` em cada um e escreve uma tabela `## Package Legitimacy Audit` no RESEARCH.md com os campos Registry, Age, Downloads, Source Repo e veredicto do slopcheck. Veredictos:
+Quando o pesquisador recomenda pacotes externos, executa `gsd-tools query package-legitimacy check --ecosystem <npm|pypi|crates> <pkg>` em cada um e escreve uma tabela `## Package Legitimacy Audit` no RESEARCH.md com os campos Registry, Age, Downloads, Source Repo e veredicto de legitimidade. Veredictos:
 
 - `[SLOP]` — pacote removido do RESEARCH.md completamente; nunca chega ao planejador
 - `[SUS]` — pacote sinalizado; o planejador insere `checkpoint:human-verify` antes da tarefa de instalação
@@ -817,6 +817,8 @@ v1.40.0, [#2792](https://github.com/open-gsd/gsd-core/issues/2792)).
 /gsd-health --context               # Triagem de utilização de contexto
 ```
 
+**Sombreamento de instalação entre escopos (`W028`).** Quando um runtime é instalado em ambos os escopos `global` e `local` e as regras de resolução de gatilhos do host tornam a superfície `/gsd-*` de um dos escopos inalcançável — o caso do Claude Code: a skill pessoal sempre vence o comando de projeto — a checagem de integridade adiciona um aviso de severidade WARNING nomeando os gatilhos sombreados, o escopo vencedor e o escopo perdedor. Isso nunca altera o status de aprovação/reprovação e nunca é corrigido automaticamente (não existe um único escopo correto a remover), então `--repair` nunca o toca. É idêntico ao mesmo aviso que o GSD Core imprime no momento da instalação.
+
 ### `/gsd-cleanup`
 
 Arquiva diretórios de fases acumulados de milestones concluídos e poda branches locais cujo upstream foi excluído.
@@ -1164,7 +1166,7 @@ Revisa arquivos de código-fonte alterados durante uma fase em busca de bugs, vu
 | Argumento | Obrigatório | Descrição |
 |-----------|-------------|-----------|
 | `N` | **Sim** | Número da fase cujas mudanças revisar (por exemplo, `2` ou `02`) |
-| `--depth=quick\|standard\|deep` | Não | Nível de profundidade da revisão (substitui a configuração `workflow.code_review_depth`). `quick`: somente correspondência de padrões (~2 min). `standard`: análise por arquivo com verificações específicas de linguagem (~5–15 min, padrão). `deep`: análise entre arquivos incluindo grafos de importação e cadeias de chamadas (~15–30 min) |
+| `--depth=quick\|standard\|deep` | Não | Nível de profundidade da revisão. Substitui tanto `workflow.code_review_depth` quanto qualquer regra de caminho correspondente em `workflow.code_review_depth_overrides` — a flag sempre prevalece. `quick`: somente correspondência de padrões (~2 min). `standard`: análise por arquivo com verificações específicas de linguagem (~5–15 min, padrão). `deep`: análise entre arquivos incluindo grafos de importação e cadeias de chamadas (~15–30 min) |
 | `--files file1,file2,...` | Não | Lista explícita de arquivos separados por vírgula; ignora completamente o escopo SUMMARY/git |
 | `--fix` | Não | Corrige automaticamente problemas após a revisão — lê REVIEW.md, cria agente corretor, faz commit de cada correção atomicamente |
 | `--fix --all` | Não | Inclui descobertas Info no escopo de correção (padrão: somente Critical + Warning) |

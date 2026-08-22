@@ -19,54 +19,39 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
+const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 // In-process seam for the fail-closed read-injection tests at the bottom of this
 // file (#2365 review): readPhaseScope is the pure phase-scope reader behind the
 // gate. Those tests monkeypatch fs rather than drive a subprocess.
 const { readPhaseScope } = require('../gsd-core/bin/lib/check-command-router.cjs');
+const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
 
 const TOOLS_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
-
-const TEST_ENV_BASE = {
-  GSD_SESSION_KEY: '',
-  CODEX_THREAD_ID: '',
-  CLAUDE_SESSION_ID: '',
-  CLAUDE_CODE_SSE_PORT: '',
-  OPENCODE_SESSION_ID: '',
-  GEMINI_SESSION_ID: '',
-  CURSOR_SESSION_ID: '',
-  WINDSURF_SESSION_ID: '',
-  TERM_SESSION: '',
-  WT_SESSION: '',
-  TMUX_PANE: '',
-  ZELLIJ_SESSION_NAME: '',
-  TTY: '',
-  SSH_TTY: '',
-};
 
 function runTools(args, cwd) {
   const argv = Array.isArray(args)
     ? args
     : (args.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [])
         .map((t) => t.replace(/"([^"]*)"/g, '$1').replace(/'([^']*)'/g, '$1'));
-  try {
-    const stdout = execFileSync(process.execPath, [TOOLS_PATH, ...argv], {
-      cwd,
-      encoding: 'utf-8',
-      env: { ...process.env, ...TEST_ENV_BASE },
-      timeout: 60000,
-    });
-    return { success: true, output: stdout.trim(), exitCode: 0, error: '' };
-  } catch (err) {
-    return {
-      success: false,
-      output: err.stdout?.toString().trim() || '',
-      error: err.stderr?.toString().trim() || err.message,
-      exitCode: err.status ?? 1,
-    };
+  const r = runNode([TOOLS_PATH, ...argv], {
+    cwd,
+    env: { ...process.env, ...TEST_ENV_BASE },
+    timeoutMs: 60000,
+  });
+  if (r.outcome === OUTCOME.EXITED && r.exitCode === 0) {
+    return { success: true, output: r.stdout.trim(), exitCode: 0, error: '' };
   }
+  return {
+    success: false,
+    output: r.stdout.trim(),
+    // Non-EXITED outcomes (timeout, spawn failure, buffer overflow) never
+    // populate stderr, so fall back to the seam's outcome label — mirroring
+    // execFileSync's err.message fallback when err.stderr was empty.
+    error: r.stderr.trim() || `process-seam: ${r.outcome}`,
+    exitCode: r.exitCode ?? 1,
+  };
 }
 
 function makeProject(workflow) {
@@ -358,7 +343,7 @@ describe('readPhaseScope — fail-closed on a real read failure (#2365 review)',
     tmpDir = makeProject({ api_coverage_gate: true });
     const phaseDir = makePhaseDir(tmpDir, '01-pay');
     writePlan(phaseDir, '01-PLAN.md', '# Plan\nIntegrate the Stripe API.');
-    const res = withFsThrow('readdirSync', new RegExp(phaseDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'), 'EACCES', () =>
+    const res = withFsThrow('readdirSync', new RegExp(escapeRegex(phaseDir) + '$'), 'EACCES', () =>
       readPhaseScope(tmpDir, phaseDir, '01'));
     assert.ok(res.readError, 'an unreadable phase directory must set readError, not read as empty');
   });

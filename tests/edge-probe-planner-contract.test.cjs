@@ -1,4 +1,5 @@
-// allow-test-rule: runtime-contract-is-the-product — plan-phase.md's planner prompt is the deployed runtime contract under assertion
+// allow-test-rule: source-text-is-the-product
+// plan-phase.md's planner prompt is the deployed runtime contract under assertion
 // plan-phase.md is the deployed planning workflow contract; these checks lock
 // the SPEC path wiring and quality-gate that the edge-probe review (RR-01/02/03)
 // requires — assertions scope to extracted sub-blocks to avoid false positives.
@@ -31,17 +32,17 @@ function extractDownstreamConsumerBlock(content) {
   return content.slice(start, end + '</downstream_consumer>'.length);
 }
 
-// Extract the planner <files_to_read> block that contains {UI_SPEC_PATH}
-// There are multiple <files_to_read> blocks in plan-phase.md; we need the one
+// Extract the planner <required_reading> block that contains {UI_SPEC_PATH}
+// There are multiple <required_reading> blocks in plan-phase.md; we need the one
 // at ~line 890-912 inside the planning_context markdown block.
 function extractPlannerFilesBlock(content) {
   let pos = 0;
   while (true) {
-    const start = content.indexOf('<files_to_read>', pos);
+    const start = content.indexOf('<required_reading>', pos);
     if (start === -1) return '';
-    const end = content.indexOf('</files_to_read>', start);
+    const end = content.indexOf('</required_reading>', start);
     if (end === -1) return '';
-    const block = content.slice(start, end + '</files_to_read>'.length);
+    const block = content.slice(start, end + '</required_reading>'.length);
     if (block.includes('{UI_SPEC_PATH}')) {
       return block;
     }
@@ -79,7 +80,7 @@ test('RR-01: plan-phase.md resolves phase *-SPEC.md (excluding AI/UI variants) i
   assert.match(
     filesBlock,
     /[{]SPEC_PATH[}]/,
-    'The planner <files_to_read> block (containing {UI_SPEC_PATH}) must also contain {SPEC_PATH}'
+    'The planner <required_reading> block (containing {UI_SPEC_PATH}) must also contain {SPEC_PATH}'
   );
 });
 
@@ -127,7 +128,7 @@ test('RR-01 reachability: SPEC_FILE resolution is NOT gated inside the AI-SPEC a
 // templates/planner-subagent-prompt.md file is orphaned (loaded by nothing), so asserting the
 // contract there is false assurance — the test stays green even if the runtime never consumes it.
 // Pin the contract to the <downstream_consumer> block plan-phase.md actually sends the planner.
-test('RR-02 consumer: plan-phase.md downstream_consumer instructs lifting covered/backstop edges into must_haves.truths', () => {
+test('RR-02 consumer: plan-phase.md downstream_consumer instructs lifting resolved edges into must_haves.truths', () => {
   const block = extractDownstreamConsumerBlock(readPlanPhase());
 
   assert.ok(block.length > 0, 'sanity: plan-phase.md must contain a <downstream_consumer> block to scope this test');
@@ -153,15 +154,15 @@ test('RR-02 consumer: plan-phase.md downstream_consumer instructs lifting covere
   );
 });
 
-// Test D (RR-03): plan-phase.md <quality_gate> contains a covered/backstop ↔ must_haves item
-// This MUST FAIL before the RR-03 fix (no such quality_gate item exists today)
-test('RR-03: planner quality_gate requires covered/backstop edges represented in must_haves', () => {
+// Test D (RR-03): plan-phase.md <quality_gate> contains a resolved-edge ↔ must_haves item
+// #3132: vocabulary realigned from covered/backstop-as-status to resolved+verification
+test('RR-03: planner quality_gate requires resolved edges represented in must_haves', () => {
   const content = readPlanPhase();
   const qgBlock = extractQualityGateBlock(content);
 
   assert.match(
     qgBlock,
-    /covered.*backstop.*must_haves|backstop.*covered.*must_haves/i,
-    'planner quality_gate must contain a checklist item tying covered/backstop edges to must_haves'
+    /resolved.*edge.*must_haves/i,
+    'planner quality_gate must contain a checklist item tying resolved edges to must_haves'
   );
 });

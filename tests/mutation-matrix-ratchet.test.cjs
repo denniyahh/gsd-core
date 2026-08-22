@@ -22,8 +22,10 @@
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
-const { execFileSync } = require('node:child_process');
 const path = require('node:path');
+const { runNode } = require('./helpers/process-seam.cjs');
+const { throwIfFailed } = require('./helpers/git-fixture.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const MATRIX_SCRIPT = path.resolve(__dirname, '../scripts/mutation-matrix.cjs');
 const matrix = require(MATRIX_SCRIPT);
@@ -116,15 +118,16 @@ describe('mutation-matrix ratchet: matrix JSON output includes minScore', () => 
     const moduleNames = Object.keys(covered);
     const stdinLines = moduleNames.map(name => `src/${name}.cts`).join('\n');
 
-    const raw = execFileSync(
-      process.execPath,
+    const spawnResult = runNode(
       [MATRIX_SCRIPT],
       {
         input: stdinLines + '\n',
-        encoding: 'utf8',
         cwd: path.resolve(__dirname, '..'),
+        timeoutMs: PROBE_TIMEOUT_MS,
       }
     );
+    throwIfFailed(spawnResult, `node ${MATRIX_SCRIPT}`);
+    const raw = spawnResult.stdout;
 
     let result;
     try {
@@ -196,6 +199,9 @@ const RATCHET_BASELINE = {
   'config-schema':           52,  // CI 54.55% 2026-06-14; was 68 (timeout-inflated local)
   'active-workstream-store': 80,
   'core-utils':              75,
+  'planning-inspect':        56,  // CI run 32392791843: 57.03% (unit shard); ratchet candidate vs TARGET 80
+  'plan-document':           75,  // CI run 32392791843: 76.58% (unit shard)
+  'planning-command-router': 94,  // CI run 32392791843: 95.65% (unit shard); already exceeds TARGET 80
 };
 
 describe('mutation-matrix ratchet: floor equality enforcement', () => {

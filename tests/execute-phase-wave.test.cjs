@@ -40,6 +40,7 @@ describe('execute-phase command: --wave flag', () => {
 
   test('objective describes wave-filter execution', () => {
     const content = fs.readFileSync(COMMAND_PATH, 'utf-8');
+    // eslint-disable-next-line local/no-unbounded-quantifier -- parses this repo's own command .md content, fixed-size author-controlled content
     const objectiveMatch = content.match(/<objective>([\s\S]*?)<\/objective>/);
     assert.ok(objectiveMatch, 'should have <objective> section');
     assert.ok(objectiveMatch[1].includes('--wave N'), 'objective should mention --wave N');
@@ -75,17 +76,154 @@ describe('execute-phase workflow: wave filtering', () => {
 
   test('workflow has partial-wave completion guardrail', () => {
     const content = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+    // handle_partial_wave_execution was extracted to
+    // gsd-core/workflows/execute-phase/steps/partial-wave.md. The parent now only
+    // references it via a <gsd:section> pointer, so assert the pointer is present here
+    // and then read the actual step body from the extracted file below.
     assert.ok(
-      content.includes('<step name="handle_partial_wave_execution">'),
+      content.includes('gsd-core/workflows/execute-phase/steps/partial-wave.md'),
+      'workflow should reference the extracted partial-wave step file'
+    );
+
+    const PARTIAL_WAVE_STEP_PATH = path.join(
+      __dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'partial-wave.md'
+    );
+    assert.ok(fs.existsSync(PARTIAL_WAVE_STEP_PATH), 'partial-wave step file should exist');
+    const stepContent = fs.readFileSync(PARTIAL_WAVE_STEP_PATH, 'utf-8');
+
+    assert.ok(
+      stepContent.includes('<step name="handle_partial_wave_execution">'),
       'workflow should have a partial wave handling step'
     );
     assert.ok(
-      content.includes('Do NOT run phase verification'),
+      stepContent.includes('Do NOT run phase verification'),
       'partial wave step should skip phase verification'
     );
     assert.ok(
-      content.includes('Do NOT mark the phase complete'),
+      stepContent.includes('Do NOT mark the phase complete'),
       'partial wave step should skip phase completion'
+    );
+  });
+});
+
+// #2868: a phase whose plans are ALL summarized but which never reached
+// verify_phase_goal (most commonly a retired checkpoint plan that still wrote a
+// SUMMARY) must resume at the phase gates instead of exiting unconditionally —
+// the prior behavior made `code_review_gate`, `regression_gate`, and
+// `verify_phase_goal` (the only producer of *-VERIFICATION.md) unreachable.
+describe('execute-phase workflow: #2868 stranded-phase resume on discover_and_group_plans', () => {
+  test('W1: all-filtered outcome is no longer an unconditional exit; it consults verification status', () => {
+    const content = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+    assert.ok(
+      !content.includes('If all filtered: "No matching incomplete plans" → exit.'),
+      'the old unconditional all-filtered exit line must be gone (#2868)'
+    );
+    assert.ok(
+      content.includes('VERIFY_STATUS'),
+      'discover_and_group_plans should consult VERIFY_STATUS before exiting on all-filtered'
+    );
+    assert.ok(
+      content.includes('verification status'),
+      'discover_and_group_plans should call the verification status query'
+    );
+  });
+
+  test('W2: the resume path names both code_review_gate and regression_gate', () => {
+    const content = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+    const discoverIdx = content.indexOf('<step name="discover_and_group_plans">');
+    const discoverEnd = content.indexOf('</step>', discoverIdx) + '</step>'.length;
+    assert.ok(discoverIdx >= 0, 'discover_and_group_plans step should exist');
+    const discoverSection = content.substring(discoverIdx, discoverEnd);
+
+    assert.ok(
+      discoverSection.includes('code_review_gate'),
+      'discover_and_group_plans should name code_review_gate as the resume target'
+    );
+    assert.ok(
+      discoverSection.includes('regression_gate'),
+      'discover_and_group_plans should name regression_gate so a future rename breaks this test ' +
+        'instead of silently orphaning the resume path'
+    );
+  });
+
+  test('W3: the resume path is gated off when a filter is active (--gaps-only or WAVE_FILTER)', () => {
+    const content = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+    const discoverIdx = content.indexOf('<step name="discover_and_group_plans">');
+    const discoverEnd = content.indexOf('</step>', discoverIdx) + '</step>'.length;
+    assert.ok(discoverIdx >= 0, 'discover_and_group_plans step should exist');
+    const discoverSection = content.substring(discoverIdx, discoverEnd);
+
+    const filterIdx = discoverSection.indexOf('A filter is active');
+    assert.ok(filterIdx >= 0, 'discover_and_group_plans should describe a filter-active branch');
+    // Both flags must be mentioned near the filter-active branch, not merely
+    // anywhere in the step (e.g. in the pre-existing filtering prose above).
+    const filterClause = discoverSection.substring(filterIdx, filterIdx + 200);
+    assert.ok(
+      filterClause.includes('--gaps-only'),
+      'filter-active branch should mention --gaps-only'
+    );
+    assert.ok(
+      filterClause.includes('WAVE_FILTER'),
+      'filter-active branch should mention WAVE_FILTER'
+    );
+  });
+
+  test('W4: the resume decision is gated on the absence of blocked_by-skipped plans', () => {
+    const content = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+    const discoverIdx = content.indexOf('<step name="discover_and_group_plans">');
+    const discoverEnd = content.indexOf('</step>', discoverIdx) + '</step>'.length;
+    assert.ok(discoverIdx >= 0, 'discover_and_group_plans step should exist');
+    const discoverSection = content.substring(discoverIdx, discoverEnd);
+
+    // Scope to the resume-decision text specifically (from the "If all filtered" marker
+    // onward), not the pre-existing #2830 filtering prose above it that already mentions
+    // blocked_by unconditionally — otherwise this assertion would be vacuous.
+    const decisionIdx = discoverSection.indexOf('If all filtered');
+    assert.ok(decisionIdx >= 0, 'discover_and_group_plans should have an all-filtered decision block');
+    const decisionText = discoverSection.substring(decisionIdx);
+
+    assert.ok(
+      decisionText.includes('blocked_by'),
+      'the resume-decision text must reference blocked_by so an all-blocked phase is never ' +
+        'reported as finished (#2868 finding 1)'
+    );
+    assert.ok(
+      /stuck/i.test(decisionText),
+      'the resume-decision text must call out the blocked-and-incomplete case as stuck, ' +
+        'distinct from genuinely finished'
+    );
+  });
+
+  test('W5: the resume path enters at aggregate_results, not code_review_gate', () => {
+    const content = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+    const discoverIdx = content.indexOf('<step name="discover_and_group_plans">');
+    const discoverEnd = content.indexOf('</step>', discoverIdx) + '</step>'.length;
+    assert.ok(discoverIdx >= 0, 'discover_and_group_plans step should exist');
+    const discoverSection = content.substring(discoverIdx, discoverEnd);
+
+    const continueMatch = discoverSection.match(/continue (?:directly )?at\s+`([a-zA-Z_]+)`/);
+    assert.ok(continueMatch, 'resume decision should state which step it continues at');
+    assert.strictEqual(
+      continueMatch[1],
+      'aggregate_results',
+      'the resume path must enter at aggregate_results (the only step running the ' +
+        'SECURITY_FILE / secure-phase threats-open gate), not code_review_gate — skipping ' +
+        'aggregate_results silently drops the only security gate (#2868 finding 3)'
+    );
+    assert.notStrictEqual(
+      continueMatch[1],
+      'code_review_gate',
+      'resume entry point must not be code_review_gate'
+    );
+  });
+
+  test('W6: RESUME_TAIL_ONLY (dead, write-only state) must not appear anywhere in the workflow', () => {
+    const content = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+    assert.ok(
+      !content.includes('RESUME_TAIL_ONLY'),
+      'RESUME_TAIL_ONLY was set but never read anywhere in the workflow or its steps files ' +
+        '(#2868 finding 2) — remove it; the imperative instruction at the decision point is ' +
+        'what actually carries control flow'
     );
   });
 });
@@ -131,7 +269,6 @@ describe('execute-phase docs: user-facing wave flag', () => {
 
 describe('phase-plan-index: wave grouping behavior', () => {
   test('phase-plan-index groups plans by wave (DAG-bucketing: P002 depends on P001)', () => {
-    // allow-test-rule: behavioral — calls gsd-tools and asserts structured output
     const fs = require('fs');
     const path = require('path');
     const tmpDir = createTempProject();
@@ -197,7 +334,6 @@ describe('phase-plan-index: wave grouping behavior', () => {
   });
 
   test('phase-plan-index defaults missing wave frontmatter to wave 1', () => {
-    // allow-test-rule: behavioral — exercises gsd-tools wave-defaulting logic
     const fs = require('fs');
     const path = require('path');
     const tmpDir = createTempProject();
@@ -282,7 +418,6 @@ describe('use_worktrees config: cross-workflow structural coverage', () => {
   });
 
   test('config-set accepts workflow.use_worktrees', () => {
-    // allow-test-rule: behavioral — exercises config-set validation, not source text
     const tmpDir = createTempProject();
     try {
       const result = runGsdTools('config-set workflow.use_worktrees true', tmpDir);
@@ -352,6 +487,7 @@ describe('bug #2410: execute-phase emits checkpoint heartbeats', () => {
 
   test('workflow emits a wave-start heartbeat (A: wave-boundary checkpoint)', () => {
     assert.ok(
+      // eslint-disable-next-line local/no-unbounded-quantifier -- parses maintainer-authored execute-phase.md workflow, bounded prose, not adversarial input
       /\[checkpoint\][^\r\n]*wave \{N\}\/\{M\} starting/.test(workflow),
       'workflow should emit a wave-start [checkpoint] marker before spawning agents'
     );
@@ -359,6 +495,7 @@ describe('bug #2410: execute-phase emits checkpoint heartbeats', () => {
 
   test('workflow emits a wave-complete heartbeat (A: wave-boundary checkpoint)', () => {
     assert.ok(
+      // eslint-disable-next-line local/no-unbounded-quantifier -- parses maintainer-authored execute-phase.md workflow, bounded prose, not adversarial input
       /\[checkpoint\][^\r\n]*wave \{N\}\/\{M\} complete/.test(workflow),
       'workflow should emit a wave-complete [checkpoint] marker after spot-checks'
     );
@@ -366,6 +503,7 @@ describe('bug #2410: execute-phase emits checkpoint heartbeats', () => {
 
   test('workflow emits a plan-start heartbeat (B: plan-boundary checkpoint)', () => {
     assert.ok(
+      // eslint-disable-next-line local/no-unbounded-quantifier -- parses maintainer-authored execute-phase.md workflow, bounded prose, not adversarial input
       /\[checkpoint\][^\r\n]*plan \{plan_id\} starting/.test(workflow),
       'workflow should emit a plan-start [checkpoint] marker before each Task() dispatch'
     );
@@ -373,6 +511,7 @@ describe('bug #2410: execute-phase emits checkpoint heartbeats', () => {
 
   test('workflow emits a plan-complete heartbeat (B: plan-boundary checkpoint)', () => {
     assert.ok(
+      // eslint-disable-next-line local/no-unbounded-quantifier -- parses maintainer-authored execute-phase.md workflow, bounded prose, not adversarial input
       /\[checkpoint\][^\r\n]*plan \{plan_id\} complete/.test(workflow),
       'workflow should emit a plan-complete [checkpoint] marker after executor returns'
     );
@@ -380,10 +519,12 @@ describe('bug #2410: execute-phase emits checkpoint heartbeats', () => {
 
   test('workflow handles plan failure and checkpoint-gate heartbeats too', () => {
     assert.ok(
+      // eslint-disable-next-line local/no-unbounded-quantifier -- parses maintainer-authored execute-phase.md workflow, bounded prose, not adversarial input
       /\[checkpoint\][^\r\n]*plan \{plan_id\} failed/.test(workflow),
       'workflow should emit a plan-failed [checkpoint] marker on executor error'
     );
     assert.ok(
+      // eslint-disable-next-line local/no-unbounded-quantifier -- parses maintainer-authored execute-phase.md workflow, bounded prose, not adversarial input
       /\[checkpoint\][^\r\n]*plan \{plan_id\} checkpoint/.test(workflow),
       'workflow should emit a heartbeat when a plan returns a human-gate checkpoint'
     );
@@ -431,6 +572,7 @@ describe('bug #2410: execute-phase emits checkpoint heartbeats', () => {
     assert.ok(spawnIdx !== -1 && waitIdx !== -1, 'spawn and wait steps must exist');
     const step3 = workflow.slice(spawnIdx, waitIdx);
     assert.ok(
+      // eslint-disable-next-line local/no-unbounded-quantifier -- parses a slice of maintainer-authored execute-phase.md workflow, bounded prose, not adversarial input
       /\[checkpoint\][^\r\n]*plan \{plan_id\} starting/.test(step3),
       'plan-start heartbeat should be emitted inside step 3 (spawn executor agents)'
     );
@@ -442,6 +584,7 @@ describe('bug #2410: execute-phase emits checkpoint heartbeats', () => {
     assert.ok(waitIdx !== -1 && hookIdx !== -1, 'wait + hook steps must exist');
     const step4 = workflow.slice(waitIdx, hookIdx);
     assert.ok(
+      // eslint-disable-next-line local/no-unbounded-quantifier -- parses a slice of maintainer-authored execute-phase.md workflow, bounded prose, not adversarial input
       /\[checkpoint\][^\r\n]*plan \{plan_id\} complete/.test(step4),
       'plan-complete heartbeat should be emitted in step 4 (wait for agents)'
     );
@@ -451,6 +594,7 @@ describe('bug #2410: execute-phase emits checkpoint heartbeats', () => {
     assert.ok(reportIdx !== -1 && failureIdx !== -1, 'report + failure steps must exist');
     const step6 = workflow.slice(reportIdx, failureIdx);
     assert.ok(
+      // eslint-disable-next-line local/no-unbounded-quantifier -- parses a slice of maintainer-authored execute-phase.md workflow, bounded prose, not adversarial input
       /\[checkpoint\][^\r\n]*wave \{N\}\/\{M\} complete/.test(step6),
       'wave-complete heartbeat should be emitted in step 6 (report completion)'
     );
@@ -568,11 +712,24 @@ describe('execute-phase: inter-wave worktree base re-check (#1369)', () => {
     assert.ok(refIdx < step1Idx, 'wave-guard @-reference must appear before step 1');
   });
 
-  test('step 0.5 guards on RUNTIME=claude (worktree isolation is Claude Code-specific)', () => {
+  // #2652: previously required `RUNTIME = "claude"`, encoding the pre-#2584 premise
+  // that worktree isolation is Claude-specific. #2584 replaced that with the
+  // negotiated dispatch.isolation capability — Cursor declares harness-worktree too,
+  // and the harness fork-base caching this guard exists for is a property of the
+  // isolation model, not of the runtime name.
+  test('step 0.5 guards on the negotiated capability, not a runtime id', () => {
     const content = fs.readFileSync(WAVE_GUARD_PATH, 'utf-8');
     assert.ok(
-      content.includes('RUNTIME') && (content.includes('"claude"') || content.includes("'claude'")),
-      'step 0.5 must guard on RUNTIME=claude'
+      content.includes('ISOLATION') && content.includes('harness-worktree'),
+      'step 0.5 must guard on ISOLATION = harness-worktree'
+    );
+    assert.ok(
+      !/\[\s*"\$RUNTIME"\s*=/.test(content),
+      'step 0.5 must NOT branch on a RUNTIME literal (#2584/#2652)'
+    );
+    assert.ok(
+      content.includes('ISOLATION=none'),
+      'degrade must clear ISOLATION as well as USE_WORKTREES — dispatch reads ISOLATION (#2652)'
     );
   });
 
@@ -627,9 +784,17 @@ describe('execute-phase: between-wave manifest reset (#1369, #3384)', () => {
     assert.ok(content.includes('#3384'), 'step 7c must reference #3384');
   });
 
-  test('step 7c calls worktree.set-baseref to re-assert head config', () => {
+  test('step 7c runs the mode-threaded base-check and does NOT re-assert set-baseref (#3659)', () => {
+    // The former pin required the set-baseref re-assert, whose stated mechanism
+    // (#1369: "so the Claude Code harness re-reads the live HEAD") was fiction —
+    // the harness does not read project-settings baseRef (#48, verified 5/5;
+    // upstream claude-code#44965). Rewritten per the #3659 sanction: the
+    // between-wave re-check threads --mode and never re-asserts the dead call.
     const content = fs.readFileSync(BETWEEN_WAVE_PATH, 'utf-8');
-    assert.ok(content.includes('worktree.set-baseref'), 'step 7c must call worktree.set-baseref');
+    assert.ok(content.includes('worktree.base-check --mode "$ISOLATION"'),
+      'step 7c must thread the isolation mode through the base-check');
+    assert.ok(!content.includes('worktree.set-baseref'),
+      'step 7c must not re-assert set-baseref — the harness never read it (#48/#3659)');
   });
 
   test('step 7c appears after step 7b and before step 8 in the wave loop', () => {
@@ -646,11 +811,21 @@ describe('execute-phase: between-wave manifest reset (#1369, #3384)', () => {
     assert.ok(refPtr < idx8, 'between-wave @-reference must appear before step 8');
   });
 
-  test('step 7c guards on RUNTIME=claude for worktree-specific operations', () => {
+  // #2652: see the step 0.5 note above — migrated from the runtime-name premise to
+  // the negotiated dispatch.isolation capability.
+  test('step 7c guards on the negotiated capability, not a runtime id', () => {
     const content = fs.readFileSync(BETWEEN_WAVE_PATH, 'utf-8');
     assert.ok(
-      content.includes('RUNTIME') && (content.includes('"claude"') || content.includes("'claude'")),
-      'step 7c must guard on RUNTIME=claude'
+      content.includes('ISOLATION') && content.includes('harness-worktree'),
+      'step 7c must guard on ISOLATION = harness-worktree'
+    );
+    assert.ok(
+      !/\[\s*"\$RUNTIME"\s*=/.test(content),
+      'step 7c must NOT branch on a RUNTIME literal (#2584/#2652)'
+    );
+    assert.ok(
+      content.includes('ISOLATION=none'),
+      'degrade must clear ISOLATION as well as USE_WORKTREES — dispatch reads ISOLATION (#2652)'
     );
   });
 });
@@ -665,7 +840,9 @@ describe('execute-phase: between-wave manifest reset (#1369, #3384)', () => {
   const { describe: __foldDescribe } = require('node:test');
   __foldDescribe("folded:bug-3096-ai-integration-phase-parallel-race (consolidation epic #1969 B4 #1973)", () => {
 'use strict';
-// allow-test-rule: reads product workflow markdown (ai-integration-phase.md) to verify structural ordering contract — not a source-grep test (see #3096)
+// allow-test-rule: source-text-is-the-product (see #3096)
+// Reads product workflow markdown (ai-integration-phase.md) to verify
+// structural ordering contract.
 
 // Regression guard for bug #3096.
 //
@@ -739,3 +916,30 @@ describe('bug #3096: ai-integration-phase sequential ordering and Edit-only disc
 });
   });
 }
+
+// ─── Issue #3210: auto-mode carve-out exempts precondition-unmet checkpoints ─
+//
+// The checkpoint_handling auto-spawn rule dispatched on checkpoint type alone;
+// a checkpoint returned because a task's <precondition> was unmet would have
+// been auto-approved with a synthetic "approved" — re-approving the very
+// checkpoint the executor refused to auto-approve (it reports Gate:
+// blocking-human). This file owns the execute-phase.md host-workflow contract.
+
+describe('issue #3210: execute-phase auto-mode carve-out exempts precondition-unmet checkpoints', () => {
+  test('the checkpoint_handling auto-spawn rule names precondition-unmet checkpoints', () => {
+    const content = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+    const open = content.indexOf('<step name="checkpoint_handling">');
+    assert.ok(open !== -1, 'checkpoint_handling step not found');
+    const close = content.indexOf('</step>', open);
+    const step = content.slice(open, close);
+    const splitLines = require('../gsd-core/bin/lib/text-lines.cjs').splitLines;
+    const carveOut = splitLines(step).find((l) => l.includes('Carve-out'));
+    assert.ok(carveOut, 'checkpoint_handling must keep the blocking-human carve-out');
+    assert.match(
+      carveOut,
+      /precondition/i,
+      'the auto-mode carve-out must state that a precondition-unmet checkpoint reports ' +
+      'blocking-human and is never auto-approved (#3210)'
+    );
+  });
+});

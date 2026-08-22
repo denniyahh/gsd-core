@@ -185,7 +185,7 @@ v1.40 中，六个命名空间路由器作为第一阶段入口点随附发布�
 - 加 `--view`：将现有 RESEARCH.md 打印到标准输出，不生成新报告。RESEARCH.md 不存在时报错。
 
 **包合法性检查门（v1.42.1）：**
-当研究者推荐外部包时，会对每个包运行 `slopcheck install <pkg> --json` 并在 RESEARCH.md 中写入 `## Package Legitimacy Audit` 表格，记录注册表、年龄、下载量、源码仓库和 slopcheck 裁决。裁决结果：
+当研究者推荐外部包时，会对每个包运行 `gsd-tools query package-legitimacy check --ecosystem <npm|pypi|crates> <pkg>` 并在 RESEARCH.md 中写入 `## Package Legitimacy Audit` 表格，记录注册表、年龄、下载量、源码仓库和合法性裁决。裁决结果：
 
 - `[SLOP]` — 包从 RESEARCH.md 中完全移除，永远不会进入规划器
 - `[SUS]` — 包被标记；规划器在安装任务前插入 `checkpoint:human-verify`
@@ -814,6 +814,8 @@ ROADMAP.md 中阶段的 CRUD 操作 — 通过单一合并命令添加、插入�
 /gsd-health --context               # 上下文使用率分类
 ```
 
+**跨作用域安装遮蔽（`W028`）。** 当某个运行时同时安装在 `global` 和 `local` 两个作用域，且宿主的触发器解析规则使其中一个作用域的 `/gsd-*` 界面变得不可达——Claude Code 的情况：个人技能总是胜过项目命令——健康检查会添加一条 WARNING 级别的提示，指出被遮蔽的触发器、胜出的作用域以及落败的作用域。它从不改变健康检查的通过/失败状态，也从不会被自动修复（不存在唯一正确应移除的作用域），因此 `--repair` 永远不会处理它。这与 GSD Core 在安装时打印的提示完全相同。
+
 ### `/gsd-cleanup`
 
 归档已完成里程碑中积累的阶段目录，并删除上游已删除的本地分支。
@@ -1161,7 +1163,7 @@ node gsd-tools.cjs intel api-surface              # 渲染 api-map.json → API-
 | 参数 | 必填 | 描述 |
 |----------|----------|-------------|
 | `N` | **是** | 要审查的阶段编号（例如 `2` 或 `02`） |
-| `--depth=quick\|standard\|deep` | 否 | 审查深度级别（覆盖 `workflow.code_review_depth` 配置）。`quick`：仅模式匹配（约 2 分钟）。`standard`：按文件分析，含特定语言检查（约 5-15 分钟，默认）。`deep`：跨文件分析，包括导入图和调用链（约 15-30 分钟） |
+| `--depth=quick\|standard\|deep` | 否 | 审查深度级别。同时覆盖 `workflow.code_review_depth` 和任何匹配的 `workflow.code_review_depth_overrides` 路径规则——该标志始终优先。`quick`：仅模式匹配（约 2 分钟）。`standard`：按文件分析，含特定语言检查（约 5-15 分钟，默认）。`deep`：跨文件分析，包括导入图和调用链（约 15-30 分钟） |
 | `--files file1,file2,...` | 否 | 显式逗号分隔的文件列表；完全跳过 SUMMARY/git 范围界定 |
 | `--fix` | 否 | 审查后自动修复问题 — 读取 REVIEW.md，生成修复代理，原子性地提交每个修复 |
 | `--fix --all` | 否 | 将 Info 级别的发现纳入修复范围（默认：仅 Critical + Warning） |

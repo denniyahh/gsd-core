@@ -40,8 +40,6 @@
 
 const path = require('node:path');
 
-const REPO_ROOT = path.join(__dirname, '..', '..');
-
 const { cleanup } = require('../helpers.cjs');
 const { MANIFEST_FAMILIES, runMinimalInstall, buildParityManifest } = require('./install-shared.cjs');
 
@@ -65,7 +63,7 @@ const EXPECTED_MANIFEST_COUNT = MANIFEST_FAMILIES.length;
 // `skills/gsd/...`, and `.agents/skills` must win over `.agents`.
 
 const SKILLS_ROOTS = ['skills/gsd', '.agents/skills', 'skills'];
-const HOOKS_ROOTS = ['.kimi/hooks', 'hooks'];
+const HOOKS_ROOTS = ['.kimi-code/hooks', '.kimi/hooks', 'hooks'];
 
 /** Source-of-truth command dir every skill/command surface converts from. */
 const COMMANDS_SRC = 'commands/gsd';
@@ -423,11 +421,46 @@ const PROVENANCE_RULES = [
       if (root === 'plugins' || root === 'extensions') {
         return [COMMONJS_MARKER_SRC, INSTALL_ENGINE_SRC];
       }
-      if (root === '.kimi/hooks') return [COMMONJS_MARKER_SRC, INSTALLER_SRC];
+      // Both Kimi products install the shared bundle into their own native hook
+      // root rather than under the generic Agent-Skills configDir (#2755).
+      if (root === '.kimi/hooks' || root === '.kimi-code/hooks') {
+        return [COMMONJS_MARKER_SRC, INSTALLER_SRC];
+      }
       // 'hooks' — written by the shared bundle for most runtimes and by the
       // #2717 dedicated paths for cursor/windsurf/codex.
       return [COMMONJS_MARKER_SRC, INSTALLER_SRC, HOOKS_WINDOWS_SHIM_SRC];
     },
+  },
+  {
+    // #3023: pi renames the shared hooks bundle's staged directory from the
+    // default `hooks/` to `gsd-hooks/` (hostBehaviors.sharedHooksDirName,
+    // bin/install.js's resolveSharedHooksDirName). Same family as `hooks-built`
+    // above (built from hooks/ via scripts/build-hooks.js), staged under a
+    // different root for exactly one runtime — a dedicated, `runtimes`-scoped
+    // rule keeps that pi-only rename from ever being able to shadow another
+    // host's `(rel, runtime)` pair, rather than folding 'gsd-hooks' into the
+    // shared HOOKS_ROOTS list `hooks-built`/`commonjs-marker` both key off.
+    // `package.json` (the CommonJS marker) is excluded here and owned by the
+    // dedicated `pi-shared-hooks-commonjs-marker` rule below, mirroring how
+    // `hooks-built` excludes it in favor of the shared `commonjs-marker` rule.
+    id: 'pi-shared-hooks-built',
+    kind: 'derived',
+    runtimes: new Set(['pi']),
+    roots: ['gsd-hooks'],
+    pattern: /^(?!package\.json$).+$/,
+    sources: (m) => [`hooks/${m[0]}`],
+  },
+  {
+    // Companion to `pi-shared-hooks-built`: the CommonJS-mode marker written
+    // into pi's renamed `gsd-hooks/` root by the same installSharedHooksBundle
+    // call the generic `commonjs-marker` rule attributes for the `hooks/`
+    // family. Kept as its own pi-scoped rule for the same reason as above.
+    id: 'pi-shared-hooks-commonjs-marker',
+    kind: 'code-derived',
+    runtimes: new Set(['pi']),
+    roots: ['gsd-hooks'],
+    pattern: /^package\.json$/,
+    sources: () => [COMMONJS_MARKER_SRC, INSTALLER_SRC],
   },
   {
     id: 'copilot-hook-registration',
@@ -497,13 +530,17 @@ const PROVENANCE_RULES = [
     pattern: /^(gsd\.md|hooks\/PreToolUse)$/,
     sources: () => [CLINE_BODY_SRC],
   },
-  {
-    id: 'agents-md-code-derived',
-    kind: 'code-derived',
-    roots: ['.agents'],
-    pattern: /^AGENTS\.md$/,
-    sources: () => [CLINE_BODY_SRC],
-  },
+  // #3547 removed `agents-md-code-derived` (roots: ['.agents'],
+  // ^AGENTS\.md$) and `synthesized-gsd-defaults` (^\.gsd/defaults\.json$):
+  // both paths only appeared in a manifest while the harness collapsed
+  // configDir onto the sandbox HOME, walking HOME-level siblings
+  // (cline's ~/.agents/AGENTS.md, every non-Claude runtime's
+  // ~/.gsd/defaults.json). With the harness installing into each runtime's
+  // real global subdirectory those files sit outside the walked configDir,
+  // the rules matched nothing, and the totality guard's dead-rule arm fired
+  // — exactly as designed. The files are still written, still covered by the
+  // existence/config suites (kimi-upgrades, codex-config, install suites);
+  // they are simply no longer manifest members to attribute.
   {
     id: 'hermes-category-description',
     kind: 'code-derived',
@@ -528,17 +565,11 @@ const PROVENANCE_RULES = [
     id: 'synthesized-install-metadata',
     kind: 'synthesized',
     roots: null,
-    // `.kimi/package.json` is the same literal `{"type":"commonjs"}` CommonJS-mode
-    // marker as the root one, written into Kimi's separate hooks root
-    // (installSharedHooksBundle, install.js:11044-11046).
-    pattern: /^(\.gsd-profile|package\.json|\.kimi\/package\.json|gsd-core\/VERSION|gsd-core\/\.gsd-runtime)$/,
-    sources: () => [],
-  },
-  {
-    id: 'synthesized-gsd-defaults',
-    kind: 'synthesized',
-    roots: null,
-    pattern: /^\.gsd\/defaults\.json$/,
+    // `.kimi/package.json` and `.kimi-code/package.json` are the same literal
+    // `{"type":"commonjs"}` CommonJS-mode marker as the root one, written into
+    // each Kimi product's separate hooks root (installSharedHooksBundle; the
+    // per-runtime root split is #2755).
+    pattern: /^(\.gsd-profile|package\.json|\.kimi(-code)?\/package\.json|gsd-core\/VERSION|gsd-core\/\.gsd-runtime)$/,
     sources: () => [],
   },
   {

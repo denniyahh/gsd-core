@@ -88,8 +88,47 @@ record.
 
 ### File Manifest
 
-The existing manifest remains the ownership baseline. It records the installed
-GSD version, install mode, and hashes for distribution-owned files.
+`gsd-file-manifest.json` remains the ownership baseline. It records the
+installed GSD version, install mode, the runtime and scope that wrote it, and
+hashes for distribution-owned files.
+
+```json
+{
+  "manifestVersion": 2,
+  "version": "1.9.2",
+  "timestamp": "2026-08-10T00:00:00.000Z",
+  "mode": "full",
+  "runtime": "claude",
+  "scope": "local",
+  "files": {
+    "gsd-core/VERSION": "sha256-hex…",
+    "commands/gsd-plan-phase.md": "sha256-hex…"
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `manifestVersion` | Schema version of **this document**. Absent ⇒ version 1, a manifest written before #2872. |
+| `version` | The GSD **package** version that wrote the manifest — *not* the schema version. The two are separate fields on purpose. |
+| `timestamp` | ISO-8601 write time. |
+| `mode` | `full` or `minimal`. |
+| `runtime` | The runtime this install targeted (`claude`, `codex`, …). Added in schema 2. |
+| `scope` | `global` or `local`. Added in schema 2. |
+| `files` | Relative path → SHA-256, for distribution-owned files only. |
+
+`runtime` and `scope` (#2872, [ADR-2866](adr/2866-install-surface-resolution.md))
+exist so a reader can answer *"which surfaces are installed, at which scopes,
+for which runtimes"* without inferring it from the directory the file happened
+to be found in. Before schema 2, a global and a local install wrote two
+manifests to two directories that were never merged and never cross-read.
+
+**A schema-1 manifest is read without error and never requires a reinstall.**
+`readInstallManifest` reports `manifestVersion: 1` with `runtime: null` and
+`scope: null`, and every consumer treats the absence of those fields as
+"not declared", never as "not installed". A `manifestVersion` written by a
+*newer* GSD is reported verbatim rather than rejected — two GSD versions on one
+machine is a supported state — so consumers branch on `>= 2`, never `=== 2`.
 
 The invariant is strict:
 
@@ -99,27 +138,33 @@ The invariant is strict:
 
 ### Install State
 
-The installer writes an install-state file next to the manifest.
-
-Required fields:
+The installer writes `gsd-install-state.json` next to the manifest. It carries
+migration bookkeeping only — the runtime, scope, version and mode of the
+install live in the file manifest above, not here.
 
 ```json
 {
-  "schema": 1,
-  "runtime": "codex",
-  "scope": "global",
-  "installed_version": "1.50.0",
-  "install_mode": "full",
-  "applied_migrations": [
+  "schemaVersion": 1,
+  "appliedMigrations": [
     {
       "id": "2026-05-11-codex-hooks-layout",
-      "package_version": "1.50.0",
+      "packageVersion": "1.50.0",
       "checksum": "sha256:...",
-      "applied_at": "2026-05-11T00:00:00.000Z"
+      "appliedAt": "2026-05-11T00:00:00.000Z"
     }
   ]
 }
 ```
+
+> **Corrected 2026-08-10 (#2872).** This section previously documented five
+> fields — `schema`, `runtime`, `scope`, `installed_version`, `install_mode` —
+> in snake_case. None of them were ever written: `InstallState`
+> (`src/installer-migrations.cts`) has only ever been
+> `{ schemaVersion, appliedMigrations }`, in camelCase. The stale schema was
+> load-bearing in the wrong direction — a reader trusting it would have
+> concluded that install scope and runtime were already recorded on disk, which
+> is the exact premise [ADR-2866](adr/2866-install-surface-resolution.md) was
+> written to fix.
 
 The checksum is calculated from the migration definition.
 
@@ -197,6 +242,34 @@ Back up a managed path before removal because the file differs from the
 previous manifest. The user gets a clear report and can inspect the backup.
 
 Use when a feature retires a managed file that users may have patched.
+
+### remove-empty-dir
+
+Remove a directory node, but ONLY via `fs.rmdirSync` — never a recursive
+removal (`fs.rmSync`, `{ recursive: true }`, `{ force: true }`). The executor
+re-checks emptiness immediately before the call: a directory that still holds
+any entry is left in place as a successful, non-error outcome
+(`skipped-not-empty`), not swept. This is deliberately WEAKER than a recursive
+directory-removal primitive, which the framework intentionally does not
+provide (see migration 003's docblock and the 2026-08-07 amendment to
+`docs/adr/0008-installer-migration-module.md`) — it exists only to retire a
+directory NODE once every file inside it has already been individually proven
+GSD-managed (or preserved as user-owned) by other actions in the same
+migration, never to sweep a subtree in one step.
+
+Additional guards beyond emptiness: the target must not be a symlink (never
+followed, never removed through); the target's realpath must resolve strictly
+inside the config directory's realpath and must never equal the config
+directory itself; and any unexpected failure (`EACCES`, `EBUSY`, a race that
+removes the target between the check and the call) degrades to
+`left-in-place` rather than throwing, matching every sibling action type.
+
+Authoring guardrail: every `remove-empty-dir` action must include
+`ownershipEvidence`, the same bar as `remove-managed`.
+
+Use when a host runtime reserves a directory NAME for its own purposes (e.g.
+pi's `hooks/`, #3023) such that leaving an emptied shell behind is not enough
+— the directory's mere existence, not its contents, is what a host inspects.
 
 ### move-managed
 
@@ -505,6 +578,8 @@ Each row corresponds to one migration record in `src/installer-migrations/`.
 | `2026-07-17-opencode-baseline-commands-dir` | `005-opencode-baseline-commands-dir.cts` | 1.7.0 | global, local | No | Baselines pre-existing files under OpenCode's `commands/` (plural) directory during the first-time scan. #2329 moved OpenCode command materialization to `commands/`, but 000's `RUNTIME_SURFACES.opencode` is a shipped, immutable body that still only names the legacy `command/` alias, so this fix-forward migration widens the scanned surface. OpenCode only; Kilo is unaffected. |
 | `2026-07-20-pi-extension-cjs-to-js` | `006-pi-extension-cjs-to-js.cts` | 1.7.1 | global, local | Yes | Removes the stale `extensions/gsd.cjs` left by pre-#2470 pi installs. pi's extension auto-discovery (`isExtensionFile()`) accepts only `.ts`/`.js`, so the `.cjs` file was never loaded and `/gsd` never registered; #2470 renamed the installed artifact to `extensions/gsd.js`, orphaning the old path. Locally modified copies are backed up rather than deleted; an unmanifested `gsd.cjs` is preserved as a user file. pi only. |
 | `2026-07-28-retire-config-root-commonjs-marker` | `007-retire-config-root-commonjs-marker.cts` | 1.8.0 | global, local | Yes | Removes `<configRoot>/package.json` when it is exactly the `{"type":"commonjs"}` marker pre-#2544 installs wrote there. #2544 moved that marker into the directories GSD fills (`hooks/`, and the native plugin dir), so an upgraded install would otherwise keep both and stay pinned to CommonJS at a config root GSD no longer writes. Ownership is proven by exact content match, not the manifest (the marker was never manifest-recorded) — a `package.json` with any other content is left untouched, with no backup-and-remove branch. All runtimes; kimi's root marker lives outside `configDir` and is retired by the installer instead. |
+| `2026-07-29-cursor-retire-commands-surface` | `008-cursor-retire-commands-surface.cts` | 1.8.1 | global, local | Yes | Removes manifest-managed `commands/gsd-*.md` files from Cursor installs. Cursor already exposes the corresponding skills in the slash menu and to contextual model invocation, so the command copies produced duplicate entries (#2644). Modified files are backed up; unmanifested files are preserved. |
+| `2026-08-07-pi-retire-reserved-hooks-dir` | `009-pi-retire-reserved-hooks-dir.cts` | 1.9.2 | global, local | Yes | Removes manifest-managed files under pi's legacy `hooks/` directory and, once empty, the directory itself (and `hooks/lib/`), now that the shared hook bundle installs at `gsd-hooks/` instead. pi's `checkDeprecatedExtensionDirs()` warns on `hooks/`'s mere existence, not its contents, so an emptied shell would keep warning forever without the new `remove-empty-dir` action (#3023). Modified files are backed up; unmanifested files are preserved and keep the directory alive. pi only. |
 
 ## Prior Art
 
