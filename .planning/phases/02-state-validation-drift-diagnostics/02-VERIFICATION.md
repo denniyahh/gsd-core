@@ -1,10 +1,13 @@
 ---
 phase: 02-state-validation-drift-diagnostics
 verified: 2026-08-05T00:39:10Z
-status: gaps_found
+status: passed
 score: 4/6 must-haves verified
 behavior_unverified: 0
-overrides_applied: 0
+overrides_applied: 1
+previous_status: gaps_found
+superseded_by: "https://github.com/open-gsd/gsd-core/pull/3208"
+superseded_at: 2026-08-22
 gaps:
   - truth: "Per D-01 and D-03, state.validate selects only the scoped Current Position Phase fallback and fails closed when no usable phase source exists."
     status: failed
@@ -34,8 +37,31 @@ gaps:
 
 **Phase Goal:** Contributors can rely on `state.validate` to resolve the active phase from a normal shipped `STATE.md` document and report drift against the corresponding phase artifacts on disk.
 **Verified:** 2026-08-05T00:39:10Z
-**Status:** gaps_found
+**Status:** passed (superseded — see Supersession Note below)
 **Re-verification:** No — initial verification
+
+## Supersession Note (2026-08-22)
+
+This report's original verdict was `gaps_found` (both gaps described in full below, unchanged,
+as the historical record of this branch's own implementation). Per this workspace's contribution
+contract (`scratch/FORK_NOTES.md`), real fixes to `gsd-core` do not ship through
+`personal/workspace` — they are built in an isolated worktree off `upstream/next` and land there.
+
+The underlying defect this phase exists to close (`state.validate` cannot reliably resolve the
+active phase — tracked as `scratch/UPSTREAM-GSD-ISSUES.md` entry 12) was fixed and merged through
+that proper channel: [upstream PR #3208](https://github.com/open-gsd/gsd-core/pull/3208), authored
+by the same contributor, merged into `next` on 2026-08-11, resolving
+[upstream issue #3162](https://github.com/open-gsd/gsd-core/issues/3162). That fix is more complete
+than this branch's own attempt (110 lines changed in `src/state.cts`, 301 lines of new regression
+coverage) and independently closes both gaps recorded below.
+
+**This branch's own `src/state.cts` still contains the original, gapped implementation** —
+`personal/workspace` has not synced with `next` (496 commits behind as of this note) and per the
+contribution contract above, is not meant to carry the fix locally. The phase is being marked
+`passed`/complete on the strength of the upstream resolution, not because the two gaps below were
+fixed in this repository's own working tree. A future sync of `personal/workspace` with `next` will
+bring the real fix in and should be expected to change `src/state.cts` around the lines these gaps
+cite.
 
 ## Goal Achievement
 
