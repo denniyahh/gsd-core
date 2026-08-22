@@ -2,18 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: State Diagnostics
-current_phase: 02
-status: completed
+status: Awaiting next milestone
 stopped_at: context exhaustion at 76% (2026-08-19)
-last_updated: "2026-08-22T17:09:34.256Z"
+last_updated: "2026-08-22T17:23:29.935Z"
 last_activity: 2026-08-22
-last_activity_desc: Phase 02 complete
+last_activity_desc: Milestone v1.1 completed and archived
+state_head: 239a0684b41f7e81dadcf32c7c5c9b0050ab2b88
 progress:
   total_phases: 1
   completed_phases: 1
   total_plans: 1
   completed_plans: 1
   percent: 100
+current_phase: 02
 current_phase_name: state-validation-drift-diagnostics
 ---
 
@@ -28,12 +29,10 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 ## Current Position
 
-Phase: 02
-Plan: Not started
-Status: All phases complete
-Last activity: 2026-08-22 — Phase 02 complete
-
-Progress: [██████████] 100%
+Phase: Milestone v1.1 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-08-22 — Milestone v1.1 completed and archived
 
 ## Performance Metrics
 
@@ -94,4 +93,4 @@ Resume file: None
 
 ## Operator Next Steps
 
-- Phase 2 was the last phase of milestone v1.1 — run `/gsd-complete-milestone` to archive v1.1, or begin milestone v1.2 (Phase 3: Executor Safety and Branching Guard).
+- Start the next milestone with $gsd-new-milestone
