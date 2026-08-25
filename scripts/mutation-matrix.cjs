@@ -92,10 +92,16 @@ function readStdinSync() {
 // confirmed equivalent mutant is acceptable.
 //
 // HOW TO UPDATE:
-//   1. Run the per-module Stryker shard locally.
-//   2. Note the reported score.
-//   3. Set minScore = floor(score) - 1 (never lower than current value).
-//   4. Open a PR — the CI gate will enforce the new floor on every future run.
+//   1. The per-module Stryker shard CANNOT be run locally: Stryker's command
+//      runner invokes `node --test` once per mutant (see stryker.config.mjs),
+//      and this repo hard-blocks local `node --test` via
+//      .claude/hooks/block-local-node-test.sh. Push the branch instead and
+//      let CI run the shard for the changed module.
+//   2. Read the measured score from the CI shard's output.
+//   3. Set minScore = floor(measured) - 1 (never lower than current value)
+//      and update the matching RATCHET_BASELINE entry in the same diff.
+//   4. Open/update the PR — the CI gate will enforce the new floor on every
+//      future run.
 
 /** Long-run target for all modules (ADR-456). */
 const TARGET_MUTATION_SCORE = 80;
@@ -258,6 +264,70 @@ const COVERED = {
       'tests/planning-inspect.unit.test.cjs',
     ],
     minScore: 94,
+  },
+  // model-catalog: net-new registration by #3007. The module was entirely
+  // outside mutation scoring (has_work: "false") before this entry, so the
+  // #3007 per-model Codex effort rewrite (renderEffortForRuntime's
+  // CODEX_MODEL_EFFORT lookup, the 'ultra' policy rejection, the ladder
+  // walk-up clamp) had zero mutation coverage.
+  //
+  // Same #2790 precedent as planning-inspect above: this shard points at a
+  // dedicated tests/model-catalog.unit.test.cjs, NOT tests/model-resolver.test.cjs
+  // — that integration file uses runGsdTools heavily and would hit the same
+  // 15-minute shard-cap cancellation #2790 documented (a `node --test <file>`
+  // invocation is ONE test costing whatever its slowest case costs, re-run
+  // per mutant). tests/model-catalog.unit.test.cjs is spawn-free, in-process,
+  // and runs in well under a second.
+  //
+  // Measured CI score (GitHub Actions run 32605073352, job 97108869486):
+  //   model-catalog 59.62% → floor 58  (248 killed, 168 survived, 0 timeouts,
+  //     0 errors; below TARGET_MUTATION_SCORE (80) — ratchet candidate like
+  //     planning-inspect (56): comfortably clears its own floor but has real
+  //     room to grow. Raise as its tests improve, never lower it.)
+  // Floor follows this file's documented rule, minScore = floor(measured) - 1,
+  // matching the sibling precedent exactly (57.03 → 56, 76.58 → 75, 95.65 → 94).
+  //
+  // The shard completed in 57 seconds — concrete evidence the spawn-free
+  // unit-file design above worked: the #2790 precedent's 15-minute shard-cap
+  // cancellations do not apply here, and for comparison the `frontmatter`
+  // shard in the same run took 9m46s.
+  'model-catalog': {
+    cjs: 'gsd-core/bin/lib/model-catalog.cjs',
+    tests: ['tests/model-catalog.unit.test.cjs'],
+    minScore: 58,
+  },
+  // state-contract: net-new module from #3227. Without this entry the
+  // Stryker gate reports has_work: "false" and SKIPS it entirely — the
+  // exact gap #2790 (planning-inspect / plan-document / planning-command-router)
+  // and #3007 (model-catalog) each had to fix after the fact.
+  //
+  // Same #2790 precedent as planning-inspect / model-catalog above: this
+  // shard points at tests/state-contract.unit.test.cjs, NOT
+  // tests/state-contract.test.cjs — the latter spawns a `gsd-tools` child
+  // process per case via runGsdTools, and Stryker's command runner treats
+  // the whole `node --test <file>` invocation as ONE test costing whatever
+  // its slowest case costs, re-run once per mutant, so it cannot finish
+  // inside the 15-minute shard cap. tests/state-contract.unit.test.cjs is
+  // spawn-free and in-process.
+  //
+  // Measured CI score (GitHub Actions run 32769289750, job 97565813640,
+  // `Stryker (state-contract)`, PASSED in 2m23s):
+  //   state-contract 66.25% → floor 65  (below TARGET_MUTATION_SCORE (80) —
+  //     ratchet candidate like planning-inspect (56) and model-catalog (58):
+  //     comfortably clears its own floor but has real room to grow. Raise as
+  //     its tests improve, never lower it.)
+  // Floor follows this file's documented rule, minScore = floor(measured) - 1,
+  // matching the sibling precedent exactly (57.03 → 56, 76.58 → 75,
+  // 95.65 → 94, 59.62 → 58, 66.25 → 65).
+  //
+  // The floor MUST come from a CI shard, never a local run: local runs count
+  // timeouts as kills and inflate scores badly (this file already records
+  // prompt-budget 99.6% local vs 68.33% CI, and config-schema 69.7% local vs
+  // 54.55% CI).
+  'state-contract': {
+    cjs: 'gsd-core/bin/lib/state-contract.cjs',
+    tests: ['tests/state-contract.unit.test.cjs'],
+    minScore: 65,
   },
 };
 

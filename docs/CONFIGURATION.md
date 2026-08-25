@@ -85,7 +85,8 @@ GSD stores project settings in `.planning/config.json`. Created during `/gsd-new
   "review": {
     "default_reviewers": null,
     "reviewer_instances": {},
-    "models": {}
+    "models": {},
+    "parallel_lanes": false
   },
   "parallelization": {
     "enabled": true,
@@ -292,6 +293,45 @@ Example:
   }
 }
 ```
+
+### Parallel reviewer lanes for `/gsd-review` (#3034)
+
+By default `/gsd-review` invokes reviewer lanes one at a time. That is deliberate: concurrent
+invocation can trip provider rate limits, and a lane dropped to a rate limit is a review that
+silently lost an opinion. A pass with several reviewers therefore costs roughly the sum of their
+runtimes.
+
+The lanes within one review pass have no data dependency on one another — they all inspect the
+same immutable plan snapshot. If your providers can accept concurrent requests (independent
+accounts, generous quota, or local model servers), you can opt in:
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `review.parallel_lanes` | boolean | `false` | When `true`, dispatch independent selected reviewer lanes concurrently within a single `/gsd-review` pass. All lanes are joined before `REVIEWS.md` and consensus are rendered. |
+
+```bash
+gsd config-set review.parallel_lanes true
+/gsd-plan-review-convergence 3 --all
+```
+
+```json
+{
+  "review": {
+    "parallel_lanes": true
+  }
+}
+```
+
+**What this does not change.** Convergence cycles stay sequential — `review → replan → re-review`
+has a real data dependency, so enabling this speeds up each pass, not the number of passes.
+Per-lane timeouts, prompt budgets, diagnostic stubs, explicit-lane failure, trust/egress checks and
+result-file layout are all unchanged.
+
+**Before you enable it.** Every selected lane dispatches at once — there is no concurrency bound.
+Selecting eleven lanes issues eleven concurrent requests. Two reviewer instances backed by the same
+adapter (see below) also dispatch concurrently against that one provider, which is the most likely
+way to hit a limit. If a lane does get rate-limited it fails the way any other failing lane does:
+a diagnostic stub with captured stderr, never a silently dropped review.
 
 ### Reviewer instances for `/gsd-review` (#1517)
 
@@ -1203,14 +1243,15 @@ Configure per-CLI model selection for `/gsd-review`. When set, overrides the CLI
 | `review.models.llama_cpp` | string | (server default) | Model name passed to llama.cpp when `--llama-cpp` reviewer is invoked. If unset, the first model reported by `/v1/models` is used. |
 | `review.default_reviewers` | string[] \| null | (all detected reviewers) | Default reviewer subset for no-flag `/gsd-review`. Example: `["gemini","codex"]`. May include configured `review.reviewer_instances` names. Explicit flags and `--all` override this setting. |
 | `review.max_prompt_tokens` | number\|null | null | Default maximum estimated tokens for the assembled review prompt. When set, the prompt is deterministically trimmed before being sent to each reviewer. Per-reviewer overrides via `review.max_prompt_tokens_per_reviewer` take precedence. null = no trim (current behavior). |
-| `review.max_prompt_tokens_per_reviewer` | object | {} | Per-reviewer token budget overrides. Keys are reviewer slugs. Only lanes that declare a budget key accept one — today `ollama`, `lm_studio` and `llama_cpp`, the local model servers this exists for. Values override `review.max_prompt_tokens` for that reviewer. A per-lane value of `0` disables trimming for that lane specifically. |
+| `review.max_prompt_tokens_per_reviewer` | object | {} | Per-reviewer token budget overrides. Keys are reviewer slugs. Every declared reviewer lane accepts one (`gemini`, `claude`, `codex`, `coderabbit`, `opencode`, `qwen`, `cursor`, `antigravity`, `kimi-code`, `ollama`, `lm_studio`, `llama_cpp`). A lane's value of `-1` (the default) is unset and inherits `review.max_prompt_tokens`; `0` disables trimming for that lane specifically; any other number is that lane's own budget. |
+| `review.parallel_lanes` | boolean | `false` | Dispatch independent reviewer lanes concurrently within a single `/gsd-review` pass. Default `false` keeps the sequential dispatch that protects against provider rate limits. Opt in only when your providers can accept concurrent requests. Convergence cycles stay sequential either way. |
 | `review.ollama_host` | string | `http://localhost:11434` | Base URL of the Ollama server. Override when running Ollama on a non-default port or remote host: `gsd config-set review.ollama_host http://192.168.1.10:11434` |
 | `review.lm_studio_host` | string | `http://localhost:1234` | Base URL of the LM Studio local server. Override when using a non-default port. |
 | `review.llama_cpp_host` | string | `http://localhost:8080` | Base URL of the llama.cpp server (`llama-server`). Override when using a non-default port. |
 
-### Prompt budgets for small-context reviewers
+### Prompt budgets for reviewer lanes
 
-Local model servers (Ollama, llama.cpp, LM Studio) typically accept far fewer tokens than cloud APIs. Setting `review.max_prompt_tokens_per_reviewer` (or the global `review.max_prompt_tokens` fallback) triggers deterministic prompt trimming before the prompt is sent to that reviewer: CONTEXT is dropped first, then RESEARCH, then REQUIREMENTS; PROJECT.md is head-shrunk to the first 40 lines; PLANs are tail-truncated proportionally — instructions and roadmap are always preserved. When a reviewer is trimmed, a disclosure note is injected at the top of the prompt and trim metadata (budget, omitted sections, truncation percentage) is recorded in the REVIEWS.md frontmatter under `trimmed_reviewers`. If even the minimum review set (instructions + roadmap + plan stubs) exceeds the budget, the reviewer is skipped with a warning rather than sending a truncated prompt that would produce misleading feedback.
+Every declared reviewer lane can be capped, most usefully the local model servers (Ollama, llama.cpp, LM Studio), which typically accept far fewer tokens than cloud APIs — but any CLI lane can be given a budget too. Setting `review.max_prompt_tokens_per_reviewer` (or the global `review.max_prompt_tokens` fallback, which every lane whose own key is unset inherits) triggers deterministic prompt trimming before the prompt is sent to that reviewer: CONTEXT is dropped first, then RESEARCH, then REQUIREMENTS; PROJECT.md is head-shrunk to the first 40 lines; PLANs are tail-truncated proportionally — instructions and roadmap are always preserved. When a reviewer is trimmed, a disclosure note is injected at the top of the prompt and trim metadata (budget, omitted sections, truncation percentage) is recorded in the REVIEWS.md frontmatter under `trimmed_reviewers`. If even the minimum review set (instructions + roadmap + plan stubs) exceeds the budget, the reviewer is skipped with a warning rather than sending a truncated prompt that would produce misleading feedback.
 
 ### Example
 
@@ -1521,7 +1562,60 @@ minimal < low < medium < high < xhigh < max
 
 Effort is rendered per-runtime: `output_config.effort` for Claude (Claude Code subagent `effort` frontmatter / `CLAUDE_CODE_EFFORT_LEVEL` env), `model_reasoning_effort` for Codex (Responses API `reasoning.effort`).
 
-**Cross-provider clamping:** `max` is Anthropic-only — it clamps to `xhigh` on Codex. `minimal` is Codex-only — it clamps to `low` on Claude.
+**Cross-provider clamping:** `minimal` is Anthropic-unsupported — it clamps to `low` on Claude.
+
+**Codex effort is resolved per model, not per runtime (#3007).** Codex advertises a
+`supported_reasoning_levels` set on each model and validates against it, so the same universal level
+can pass cleanly on one model and clamp on another. GSD therefore renders against the model's own
+advertised set:
+
+| Model | Advertised levels |
+|---|---|
+| `gpt-5.6-sol` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
+| `gpt-5.6-terra` | `low`, `medium`, `high`, `xhigh`, `max` |
+| `gpt-5.6-luna` | `low`, `medium`, `high`, `xhigh`, `max` |
+| any other / unknown id | `low`, `medium`, `high`, `xhigh`, `max` (family baseline) |
+
+Today every shipped Codex model advertises the same usable range, so the same effort resolves
+identically across `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna` — `ultra` is sol's only
+differentiator, and GSD rejects it for every model regardless (see below), so no observable output
+currently differs by model. The table is per-model, not per-runtime, because Codex declares
+capability per model and the sets are free to diverge — the previous single per-runtime assumption
+is exactly what went stale and produced this change.
+
+Three consequences:
+
+- **`max` reaches Codex.** It is no longer clamped to `xhigh`. Earlier GSD releases described `max`
+  as Anthropic-only; that was accurate when written and Codex has since added it. If you set `max`
+  for a Codex agent, your generated `model_reasoning_effort` now says `max` where it previously said
+  `xhigh`.
+- **`minimal` no longer reaches Codex.** No Codex model advertises it, so it clamps up to `low` —
+  the floor every model does advertise. GSD previously emitted `minimal` verbatim, which Codex
+  rejects.
+- **`ultra` is refused outright**, and is not part of GSD's ladder. See below.
+
+**Every clamp is now visible.** `resolve-execution` reports the level you asked for alongside the
+level actually rendered, so a downgrade is legible instead of silent. These are flat keys in the
+same result object as `effort_rendered` — there is no nested `effort` object:
+
+```json
+{
+  "effort_rendered":    "low",
+  "effort_requested":   "minimal",
+  "effort_clamped":     true,
+  "effort_clamp_reason": "requested 'minimal' is not in gpt-5.6-luna's advertised reasoning levels; clamped up to its floor, 'low'."
+}
+```
+
+**Why `ultra` is rejected rather than clamped.** Codex's own catalog describes `ultra` as *"Maximum
+reasoning with automatic task delegation"* — it is a mode switch, not a louder `max`. At `ultra`
+Codex enters proactive multi-agent mode and spawns sub-agents on its own initiative, which would run
+underneath GSD's orchestration rather than inside it ([#2167](https://github.com/open-gsd/gsd-core/issues/2167)).
+GSD refuses it for every model, including `gpt-5.6-sol`, which does advertise it. This is
+deliberately stricter than Codex requires: Codex only applies proactive mode to V2 sessions and
+never to spawned sub-agents, but GSD writes effort into generated agent files at install time and
+cannot know the session source of a future invocation. Clamping `ultra` down to `max` was rejected
+as an option — it would silently discard what you actually asked for.
 
 The model-catalog's `reasoning_effort` per-tier hint is a legacy field kept for reference; effort is now config-driven.
 
@@ -1663,18 +1757,23 @@ Use `node gsd-tools.cjs resolve-execution <agent-type> [--effort <level>] [--fas
 
 ```json
 {
-  "model":             "opus",
-  "profile":           "balanced",
-  "effort":            "xhigh",
-  "effort_rendered":   "xhigh",
-  "effort_param":      "output_config.effort",
-  "effort_propagation": "frontmatter",
-  "fast_mode":         false,
+  "model":               "opus",
+  "profile":             "balanced",
+  "effort":              "xhigh",
+  "effort_rendered":     "xhigh",
+  "effort_param":        "output_config.effort",
+  "effort_propagation":  "frontmatter",
+  "effort_requested":    "xhigh",
+  "effort_clamped":      false,
+  "effort_clamp_reason": null,
+  "fast_mode":           false,
   "fast_mode_supported": false
 }
 ```
 
-`effort_param` tells you which runtime parameter to set. `fast_mode_supported` tells you whether the configured runtime supports per-agent fast_mode propagation.
+`effort_param` tells you which runtime parameter to set. `effort_requested` is the level you asked
+for (before any clamp); `effort_rendered` is what actually shipped. `effort_clamped` is `true` only
+when the two differ, and `effort_clamp_reason` explains why (`null` when unclamped). `fast_mode_supported` tells you whether the configured runtime supports per-agent fast_mode propagation.
 
 ---
 

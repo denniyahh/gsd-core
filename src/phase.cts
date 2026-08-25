@@ -21,6 +21,9 @@ import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- io.cjs is an export= CommonJS module
 import ioMod = require('./io.cjs');
 const { output, error, ERROR_REASON } = ioMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import stateContract = require('./state-contract.cjs');
+const { publishStateContract } = stateContract;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
 import configLoaderMod = require('./config-loader.cjs');
 const { loadConfig } = configLoaderMod;
@@ -61,7 +64,7 @@ import planningWorkspace = require('./planning-workspace.cjs');
 import frontmatterMod = require('./frontmatter.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- state.cjs is an export= CommonJS module
 import stateMod = require('./state.cjs');
-import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync } from './shell-command-projection.cjs';
+import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync, contentChangedAfterNormalize } from './shell-command-projection.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
@@ -593,6 +596,7 @@ interface RawPlan {
   autonomous: boolean;
   objective: string | null;
   filesModified: string[];
+  filesDeleted: string[];
   taskCount: number;
   hasSummary: boolean;
   /** #2830: true iff this plan's own SUMMARY declares `status: halted` (a designed stop). */
@@ -826,6 +830,7 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
       autonomous: planDoc.autonomous,
       objective: planDoc.objective,
       filesModified: planDoc.filesModified,
+      filesDeleted: planDoc.filesDeleted,
       agentHint: planDoc.agentHint,
       taskCount: planDoc.taskCount,
       hasSummary,
@@ -929,6 +934,7 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
       autonomous: rawPlan.autonomous,
       objective: rawPlan.objective,
       files_modified: rawPlan.filesModified,
+      files_deleted: rawPlan.filesDeleted,
       agent_hint: rawPlan.agentHint,
       task_count: rawPlan.taskCount,
       has_summary: rawPlan.hasSummary,
@@ -1148,6 +1154,18 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
   if (titleWarning) result['warning'] = titleWarning;
 
   output(result, raw, result['padded']);
+  // #3227 (design doc §40 row 26 / "Not-corruption" rule): every
+  // `publishStateContract` call site in this file is audited so a refreshed
+  // state.json `updated_at` always means something on disk actually moved —
+  // a stale-but-refreshed timestamp is worse than no refresh, because it
+  // reads as fresh to a downstream watcher. This site is unconditional
+  // because every reachable path either exits via `error()` (process.exit,
+  // never reaches here) or falls through to the unconditional
+  // `platformEnsureDir`/`platformWriteSync` pair above that always creates
+  // the phase directory and rewrites ROADMAP.md — there is no code path that
+  // reaches this line without having just written to disk. Best-effort —
+  // cannot throw, cannot change this command's exit code or output.
+  publishStateContract(cwd);
 }
 
 function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): void {
@@ -1235,6 +1253,11 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
     return added;
   });
   output({ phases: results, count: results.length }, raw);
+  // #3227: unconditional here because `platformWriteSync(roadmapPath, rawContent)`
+  // above always rewrites ROADMAP.md for every description in the batch before
+  // this line is reached; the only refusal path is the `error('ROADMAP.md not
+  // found')` above, which terminates the process and never reaches here.
+  publishStateContract(cwd);
 }
 
 function cmdPhaseInsert(cwd: string, afterPhase: string, description: string, raw: boolean): void {
@@ -1428,6 +1451,11 @@ function cmdPhaseInsert(cwd: string, afterPhase: string, description: string, ra
   };
 
   output(result, raw, decimalPhase);
+  // #3227: unconditional here because `platformWriteSync(roadmapPath, updatedContent)`
+  // above always rewrites ROADMAP.md with the inserted phase before this line is
+  // reached; every refusal along the way (bad args, missing ROADMAP.md, unresolved
+  // target bullet/header) exits via `error()`, which terminates the process.
+  publishStateContract(cwd);
 }
 
 interface RenameDirInfo {
@@ -1677,15 +1705,23 @@ function findDataRowLine(sectionText: string, dataRowIndex: number): string | nu
   return null;
 }
 
+// #3685: mirror requirementsUpdated's diff-tracking contract — the caller
+// (cmdPhaseRemove) used to report `roadmap_updated: true` unconditionally,
+// hardcoded regardless of whether this transform actually changed
+// ROADMAP.md's content. Returning a real before/after comparison here lets
+// the caller report accurately, the same fix #3685 applied to
+// `cmdPhaseComplete` and #2640/#2974 already applied to this same function's
+// sibling `stateUpdated` flag a few lines below in `cmdPhaseRemove`.
 function updateRoadmapAfterPhaseRemoval(
   roadmapPath: string,
   targetPhase: string,
   isDecimal: boolean,
   removedInt: number,
   cwd: string,
-): void {
-  withPlanningLock(cwd, () => {
-    let content = fs.readFileSync(roadmapPath, 'utf-8');
+): boolean {
+  return withPlanningLock(cwd, () => {
+    const originalContent = fs.readFileSync(roadmapPath, 'utf-8');
+    let content = originalContent;
     const escaped = escapeRegex(targetPhase);
     // #3572: ROADMAP headings and rows carry the normalized (zero-padded) form
     // of a decimal id — `phase insert 1` writes `### Phase 01.1:` while the
@@ -1883,6 +1919,14 @@ function updateRoadmapAfterPhaseRemoval(
     }
 
     platformWriteSync(roadmapPath, content);
+    // #3685 / #3691: compare NORMALIZED bytes (what platformWriteSync actually
+    // persists), not the raw pre-normalize `content` string, against the raw
+    // pre-mutation `originalContent` read above — a raw `!==` here reports a
+    // false `true` whenever this transform's regenerated output takes a
+    // different-but-equivalent shape than the already-normalized on-disk
+    // original (same normalization-order artifact #3685 fixed at
+    // cmdMilestoneComplete; see contentChangedAfterNormalize's own doc).
+    return contentChangedAfterNormalize(roadmapPath, originalContent, content);
   });
 }
 
@@ -2010,7 +2054,7 @@ function cmdPhaseRemove(
     error(`Failed to renumber phase directories after removing phase ${targetPhase}: ${msg}`);
   }
 
-  updateRoadmapAfterPhaseRemoval(
+  const roadmapUpdated = updateRoadmapAfterPhaseRemoval(
     roadmapPath,
     targetPhase,
     isDecimal,
@@ -2102,11 +2146,21 @@ function cmdPhaseRemove(
       renamed_directories: renamedDirs,
       renamed_files: renamedFiles,
       renamed_file_collisions: renamedFileCollisions,
-      roadmap_updated: true,
+      // #3685: mirror requirementsUpdated's diff-tracking contract — true only
+      // when updateRoadmapAfterPhaseRemoval's content diff detected a real
+      // change, not hardcoded regardless of whether ROADMAP.md's content
+      // actually changed.
+      roadmap_updated: roadmapUpdated,
       state_updated: stateUpdated,
     },
     raw,
   );
+  // #3227: unconditional here because `updateRoadmapAfterPhaseRemoval` above
+  // always rewrites ROADMAP.md before this line is reached; every refusal path
+  // (bad target, missing ROADMAP.md, --force-required, renumber failure) exits
+  // via `error()`, and the ambiguous-match case exits via an earlier `return`
+  // before any file is touched.
+  publishStateContract(cwd);
 }
 
 interface WriteSpec {
@@ -2115,7 +2169,14 @@ interface WriteSpec {
   after: string;
 }
 
-function writePlanningFileSet(writes: WriteSpec[]): void {
+/**
+ * #3227: returns the count of writes actually applied (entries whose
+ * `before` differed from `after` and were therefore written to disk) — the
+ * caller (`cmdPhaseComplete`) uses this as its publish-gate signal, since a
+ * re-run against an already-completed phase can produce a `writes[]` array
+ * where every entry is byte-identical to what's already on disk.
+ */
+function writePlanningFileSet(writes: WriteSpec[]): number {
   const applied: WriteSpec[] = [];
   try {
     for (const write of writes) {
@@ -2142,6 +2203,7 @@ function writePlanningFileSet(writes: WriteSpec[]): void {
     }
     throw err;
   }
+  return applied.length;
 }
 
 function phaseDisplayNameFromRoadmap(roadmapContent: string | null, phaseNum: string | null): string | null {
@@ -2219,6 +2281,12 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
     ? (phaseInfo['summaries'] as string[]).length
     : 0;
   let requirementsUpdated = false;
+  // #3685: mirror requirementsUpdated's diff-tracking contract at the
+  // writes.push({filePath, before, after}) sites below, rather than
+  // reporting via fs.existsSync (which is true whenever the file merely
+  // exists, not when the transaction actually wrote a change).
+  let roadmapUpdated = false;
+  let stateUpdated = false;
 
   const warnings: string[] = [];
   // ADR-3408 §8.5 / D2 (#3374): "liberal but visible" — when the write-seam
@@ -2411,6 +2479,15 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   // warnings[] entry below (same parity pattern as
   // verification_stale_check_indeterminate).
   let milestoneConflict: milestoneLockMod.MilestoneConflict | null = null;
+
+  // #3227: set inside `runPhaseCompleteTransaction` below from
+  // `writePlanningFileSet`'s applied-count return — the transaction always
+  // RUNS (verification passed, the lock was taken, `writes[]` was built),
+  // but a re-run against a phase whose ROADMAP/STATE bytes already reflect
+  // completion produces a `writes[]` where every entry is byte-identical to
+  // disk, so `writePlanningFileSet` applies none of them. That must not
+  // still refresh state.json's `updated_at` (design doc §40 row 26).
+  let anyPlanningWrite = false;
 
   const verificationBlocked = withPlanningLock(cwd, () => {
     // #3311: completing a phase while a live milestone claim (phase + session)
@@ -2629,6 +2706,12 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           before: originalRoadmapContent,
           after: roadmapContent,
         });
+        // #3685 / #3691: normalize both sides before comparing — see
+        // contentChangedAfterNormalize's doc (shell-command-projection.cts).
+        // A raw `!==` here false-positives whenever this phase-complete
+        // roadmap mutation regenerates a section in a different-but-
+        // equivalent raw shape than the already-normalized on-disk original.
+        roadmapUpdated = contentChangedAfterNormalize(roadmapPath, originalRoadmapContent, roadmapContent);
 
         const reqPath = path.join(planningDir(cwd), 'REQUIREMENTS.md');
         if (fs.existsSync(reqPath)) {
@@ -2945,7 +3028,11 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // diff-tracking pattern used for the ROADMAP write above. A phase
           // whose citations match nothing (ghost REQ-IDs only) must report
           // `false`, not a bare "the file was present" `true`.
-          requirementsUpdated = reqContent !== originalReqContent;
+          // #3685 / #3691: normalize both sides before comparing — same
+          // false-positive shape as the sibling roadmapUpdated/stateUpdated
+          // flags in this same transaction; all three must agree by
+          // construction (see contentChangedAfterNormalize's doc).
+          requirementsUpdated = contentChangedAfterNormalize(reqPath, originalReqContent, reqContent);
         }
       }
 
@@ -3202,9 +3289,15 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         }
 
         writes.push({ filePath: statePath, before: originalStateContent, after: stateContent });
+        // #3685 / #3691: normalize both sides before comparing (same
+        // transitionCore-regenerated-section artifact cmdMilestoneComplete
+        // hit — see contentChangedAfterNormalize's doc). Reported "not
+        // exposed" by a previous agent; the reviewer disproved that by
+        // inspection and this branch closes it.
+        stateUpdated = contentChangedAfterNormalize(statePath, originalStateContent, stateContent);
       }
 
-      writePlanningFileSet(writes);
+      anyPlanningWrite = writePlanningFileSet(writes) > 0;
     };
 
     if (fs.existsSync(statePath)) {
@@ -3268,8 +3361,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
     next_phase_name: nextPhaseName,
     is_last_phase: isLastPhase,
     date: today,
-    roadmap_updated: fs.existsSync(roadmapPath),
-    state_updated: fs.existsSync(statePath),
+    roadmap_updated: roadmapUpdated,
+    state_updated: stateUpdated,
     requirements_updated: requirementsUpdated,
     auto_pruned: autoPruned,
     warnings,
@@ -3280,6 +3373,11 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   };
 
   output(result, raw);
+  // #3227: gate on `anyPlanningWrite` (whether `writePlanningFileSet`
+  // actually wrote anything), not on reaching this line — reaching here only
+  // means verification passed and the transaction ran, not that ROADMAP.md
+  // or STATE.md bytes changed (see the `anyPlanningWrite` declaration above).
+  if (anyPlanningWrite) publishStateContract(cwd);
 }
 
 function cmdPhaseUatPassed(

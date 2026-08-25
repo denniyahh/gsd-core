@@ -45,7 +45,8 @@ node gsd-tools.cjs state load
 # Output STATE.md frontmatter as JSON
 node gsd-tools.cjs state json
 
-# Update a single field
+# Update a single field. Frontmatter keys are projections of body fields —
+# write the body field (see COMMANDS.md#state-update-field-value).
 node gsd-tools.cjs state update <field> <value>
 
 # Get STATE.md content or a specific section
@@ -1044,6 +1045,27 @@ node gsd-tools.cjs worktree record-agent \
 **`worktree record-agent`** appends one `{agent_id, worktree_path, branch, expected_base}` entry to an already-initialized manifest, validating every field **at write time using the same rules the `cleanup-wave` reader enforces** — `--branch` must match the disposable `^(worktree-)?agent-[A-Za-z0-9._/-]+$` namespace (accepts both `agent-<id>` and legacy `worktree-agent-<id>`), and `--path`/`--branch`/`--base` must be non-empty. `--agent-id` is required (write-strict), even though the reader treats it as optional. A missing or garbled field — or a duplicate `(worktree_path, branch)` the reader would dedup away — fails loudly with a recovery hint and a non-zero exit **without** writing, instead of appending an under-populated or silently-dropped entry. Whitespace-only `--path`/`--base` are rejected (values are trimmed). The on-disk manifest shape is unchanged unless `--files` is supplied (see below); the reader still re-derives `allowed_bases`, and the orchestrator still initializes the empty `{orchestrator_root, worktrees: []}` shell inline before any agent is recorded.
 
 `--files` is optional (#2596). When supplied it records the plan's declared `files_modified` — the same whitespace-separated `PLAN_FILES` list the per-plan worktree gate already builds — as an extra `files_modified` array on the entry, and `cleanup-wave` then reports any path the branch committed outside it. A blank or omitted `--files` writes no field at all, leaving the 4-field on-disk shape untouched, and the scope check is simply skipped for that entry: an unrecorded scope means *unknown*, never *declares nothing*. Values are compared against a diff, never opened as paths and never passed to a shell.
+
+`--deletions` is optional (#3003). When supplied it records the plan's declared `files_deleted` — built by the per-plan worktree gate exactly like `PLAN_FILES`, from the plan's own frontmatter — as a `declared_deletions` array on the entry. It is the opt-in the deletions guard reads (see below). A blank or omitted `--deletions` writes no field, leaving the on-disk shape untouched and the guard's original unconditional block in force. Like `--files`, values are compared against a diff and never opened or passed to a shell.
+
+**Intentional deletions (gate, #3003)**
+
+`cleanup-wave` blocks the merge of any executor branch whose diff deletes a file — a net against a mass-deletion accident. A plan whose scope legitimately includes removing a file declares those paths in its `files_deleted` frontmatter, which reaches the entry as `declared_deletions`; the guard then blocks only the deletions **not** in that list.
+
+| Branch deletes | Entry declares | Result |
+|---|---|---|
+| nothing | — | merges |
+| `tests/a.ts` | *(no field)* | **blocked** — unchanged pre-#3003 behavior |
+| `tests/a.ts` | `["tests/a.ts"]` | merges |
+| `tests/a.ts`, `src/b.ts` | `["tests/a.ts"]` | **blocked**, and the block detail names only `src/b.ts` |
+| `tests/a.ts` | `["tests"]` | **blocked** — a directory does not authorize its children |
+| `tests/a.ts` | `["*.ts"]` | **blocked** — globs are literal paths here, matching nothing |
+
+Matching is **exact after normalization**: git's C-quoting is decoded, backslashes become forward slashes, and a leading `./` and any trailing `/` are stripped — on both sides. The decode matters more than it looks: with `core.quotepath` at its git default, a path like `tests/é.ts` is reported as the literal `"tests/\303\251.ts"`, which would never compare equal to the plainly-declared path, so a correctly declared deletion of any non-ASCII path would block forever with nothing pointing at the encoding. It is deliberately neither a prefix nor a glob match — either would let one declaration authorize a whole set of deletions, which is the accident the guard exists to catch. A declared path that was not in fact deleted is inert. A blocked entry still isolates: the rest of the wave proceeds (#2852). If the deletion check itself fails the entry blocks on `deletion_check_failed` and is never filtered — a broken check is not an authorization.
+
+A declared deletion is also treated as in-scope by the advisory below, so authorizing a removal does not then warn that the removed path was out of the declared scope. That is done by **subtracting** declared deletions from the advisory's findings, not by adding them to the declared scope it matches against — the advisory reads its scope list with prefix-and-glob semantics, so adding them would quietly give `declared_deletions` a second, wider matching rule than the table above, and `["*.md"]` would go from inert to silencing the advisory entirely. One field, one matching rule, on every surface. Subtraction also means the advisory's activation is unchanged: it still runs only when `files_modified` is recorded, so a plan that declares deletions alone stays as silent as it was before #3003.
+
+One limit worth knowing, shared with `--files` and failing closed: a declared path containing a **space** cannot be expressed, because the flag value is whitespace-separated — such a path splits into fragments, matches nothing, and the entry blocks. Flag values are also read positionally and never re-inspected for shape, so a malformed `--deletions --files src/a.ts` records the literal `--files` as the declaration; that is harmless (it is a path git never reports as deleted, so it authorizes nothing) and `--files` still resolves to `src/a.ts` on its own lookup.
 
 **Scope conformance at merge (advisory, #2596)**
 
