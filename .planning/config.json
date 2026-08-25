@@ -80,7 +80,6 @@
     }
   },
   "resolve_model_ids": "omit",
-  "runtime": "codex",
   "effort": {
     "agent_overrides": {
       "gsd-plan-checker": "high",
