@@ -60,7 +60,62 @@ scp -q "$BUNDLE_LOCAL" "$REMOTE:$REMOTE_BUNDLE"
 # bash/zsh quoting ($'...' escapes, nested single-quotes) an inline
 # multi-line command would need — a file sidesteps that entirely.
 REMOTE_GIT_SCRIPT_LOCAL="$(mktemp)"
-trap 'rm -f "$REMOTE_GIT_SCRIPT_LOCAL" "$BUNDLE_LOCAL"' EXIT
+
+# `node --test` re-execs itself as a per-file worker, carrying a large
+# internal flag set (--test-isolation=process --test-timeout=0 among them) —
+# that's how it hands the resolved option set to the child. gsd-core's own
+# bounded-timeout guard test (tests/prohibition-enforcement.test.cjs:685,
+# tracked as gsd-core#3660) kills the direct child on timeout but not this
+# re-exec'd worker, so a hung fixture inside it survives forever, reparented
+# to PID 1, spinning at ~95-99% CPU. `npm test` runs that check every time,
+# so every remote CI run leaks one. Confirmed on this Mac and independently
+# on the maintainer's own machine (macOS, #3660's original report) and this
+# author's Linux worktree (2026-08-22, three orphans, ~20.5 CPU-hours before
+# being found and killed) — same defect, three machines.
+#
+# Sweep on every exit path (success, failure, or this script erroring out
+# earlier via `set -e`), not just after a passing run — a leaked worker
+# doesn't care whether the run it came from was green. Matched on BOTH flags
+# together so this can't catch an ordinary developer-invoked `node --test`.
+# Plain SIGTERM is sufficient (verified: none of the reproductions above
+# needed SIGKILL — the busy-loop never installs a handler that swallows it).
+#
+# The pattern below brackets one character in each flag name
+# (isolatio[n], timeou[t]). Without that, `pgrep -f`'s search text is embedded
+# verbatim in the argv of the process running this cleanup, and matches
+# ITSELF — confirmed live: an earlier unbracketed version killed its own
+# remote shell before the real sweep ran. A bracketed character class still
+# matches the literal character in a genuine leaked worker's argv, but breaks
+# the contiguous-substring self-match against this script's own source text
+# (same trick as gsd-core#3660's own repro, which uses `prohib[-]hang` for
+# the identical reason).
+#
+# This runs as a FILE (`sh /tmp/....sh`), not an inline `ssh host sh -c
+# '<script>'`. Confirmed live that inline fails: ssh does not preserve the
+# local shell's quoting when it forwards a multi-word remote command — it
+# space-joins the trailing argv into ONE string and sends that, so the
+# quotes protecting the multi-line body vanish before the remote's login
+# shell (fish) ever parses it, and fish then chokes on the bare `pids=$(...)`
+# inside ("Unsupported use of '='") — the exact failure mode the existing
+# REMOTE_GIT_SCRIPT_LOCAL bootstrap above already works around, for the same
+# reason. A file sidesteps it: `ssh host sh /path` has only one argument
+# after the interpreter, so there is nothing left for naive space-joining to
+# corrupt.
+REMOTE_CLEANUP_SCRIPT_LOCAL="$(mktemp)"
+cat > "$REMOTE_CLEANUP_SCRIPT_LOCAL" <<CLEANUP
+pids=\$(pgrep -f "test-isolatio[n]=process.*test-timeou[t]=0" 2>/dev/null || true)
+if [ -n "\$pids" ]; then
+  echo "🧹 killing leaked test-runner worker(s) on $REMOTE: \$pids" >&2
+  kill -TERM \$pids 2>/dev/null || true
+fi
+CLEANUP
+
+cleanup_remote_test_runners() {
+  ssh "$REMOTE" "cat > /tmp/gsd-ci-cleanup.sh" < "$REMOTE_CLEANUP_SCRIPT_LOCAL" 2>&1 || true
+  ssh "$REMOTE" sh /tmp/gsd-ci-cleanup.sh 2>&1 || true
+  rm -f "$REMOTE_GIT_SCRIPT_LOCAL" "$BUNDLE_LOCAL" "$REMOTE_CLEANUP_SCRIPT_LOCAL"
+}
+trap cleanup_remote_test_runners EXIT
 
 {
   echo "set -e"
