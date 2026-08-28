@@ -2,13 +2,13 @@
 
 ## Overview
 
-Milestone v1.1 repairs the existing `state.validate` path so the shipped `STATE.md` shape resolves its active phase and reaches real on-disk drift comparison. The repair remains confined to ledger item 12 and includes focused regression coverage; item 11 and a new `state.verify-against-disk` command remain deferred.
+Milestone v1.2 delivers the maintainer-approved #3159 escape hatch for hosts whose orchestrator session ends with the turn. The work remains confined to an opt-out configuration key, the execute-phase dispatch condition, an ADR, user-facing configuration documentation, generated artifacts, and focused verification. It does not alter default behavior or bundle unrelated executor safety work.
 
 ## Milestones
 
 - ✅ **v1.0 State Integrity** - Phase 1 shipped 2026-08-04; details are archived in [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md).
-- 🚧 **v1.1 State Diagnostics** - Phase 2 restores active-phase drift diagnostics through the existing validator.
-- 🚧 **v1.2 Executor Safety** - Phase 3 introduces execution guards for branch protection and one-shot agent lifetimes.
+- ✅ **v1.1 State Diagnostics** - Phase 2 restored active-phase drift diagnostics through the existing validator.
+- 🚧 **v1.2 Executor Session Survivability** - Phase 3 adds the #3159 opt-out for one-shot executor sessions.
 
 ## Phases
 
@@ -21,9 +21,9 @@ Milestone v1.1 repairs the existing `state.validate` path so the shipped `STATE.
 
 - [x] **Phase 2: State Validation Drift Diagnostics** - Resolve the active phase from shipped state metadata and prove that `state.validate` reports real disk drift. (completed 2026-08-22)
 
-### Milestone v1.2 — Executor Safety
+### Milestone v1.2 — Executor Session Survivability
 
-- [ ] **Phase 3: Executor Safety and Branching Guard** - Prevent accidental commits to integration branches and support one-shot executors.
+- [ ] **Phase 3: Configured Session-Survivability Dispatch** - Let a host opt out of asynchronous executor dispatch when its parent session cannot collect results.
 
 ## Phase Details
 
@@ -44,17 +44,19 @@ Milestone v1.1 repairs the existing `state.validate` path so the shipped `STATE.
 
 - [x] 02-01-PLAN.md
 
-## Milestone v1.2 — Executor Safety (Phase Details)
+## Milestone v1.2 — Executor Session Survivability (Phase Details)
 
-### Phase 3: Executor Safety and Branching Guard
+### Phase 3: Configured Session-Survivability Dispatch
 
-**Goal**: Ensure `query commit` warns/fails when attempting to commit to protected integration branches, and allow `execute-phase` to opt out of background execution for runtimes with one-shot session lifetimes.
+**Goal**: Give host integrators an explicit, default-preserving opt-out from background executor dispatch when their parent session does not survive the turn.
 **Depends on**: N/A
-**Requirements**: 
+**Requirements**: SESSION-01, SESSION-02, SESSION-03, QUALITY-03, COMPAT-01
 **Success Criteria** (what must be TRUE):
 
-  1. A contributor running `query commit` with `branching_strategy` unset warns or fails before committing directly to `main` or `develop`.
-  2. `execute-phase.md` provides an opt-out mechanism for running executors in the background, allowing safe completion on one-shot runtimes.
+  1. A host can explicitly configure its executor session as not outliving the turn, and `execute-phase` directs every executor dispatch through the foreground, awaited path.
+  2. With the configuration absent or enabled, the current background-dispatch path remains unchanged.
+  3. An ADR and configuration reference distinguish tool availability from session survivability and document the opt-out's default-preserving contract.
+  4. Focused behavioral and emitted-artifact checks exercise both values; each check includes an opposite-direction control.
 
 **Plans**: 0/0 plans executed
 
@@ -63,4 +65,4 @@ Milestone v1.1 repairs the existing `state.validate` path so the shipped `STATE.
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 2. State Validation Drift Diagnostics | v1.1 | 1/1 | Complete | 2026-08-22 |
-| 3. Executor Safety and Branching Guard | v1.2 | 0/0 | Not Started|  |
+| 3. Configured Session-Survivability Dispatch | v1.2 | 0/0 | Not Started |  |
