@@ -93,5 +93,8 @@
       "heavy": "xhigh"
     },
     "default": "high"
+  },
+  "mempalace": {
+    "enabled": true
   }
 }
