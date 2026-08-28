@@ -1,21 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.1
-milestone_name: State Diagnostics
-status: Awaiting next milestone
-stopped_at: context exhaustion at 100% (2026-08-22)
-last_updated: "2026-08-22T22:59:18.194Z"
-last_activity: 2026-08-22
-last_activity_desc: Milestone v1.1 completed and archived
-state_head: fad175ab2b4536846ea148f2374bbab2ea7c4c1c
+milestone: v1.2
+milestone_name: Executor Session Survivability
+status: planning
+last_updated: "2026-08-28T23:36:28.386Z"
+last_activity: 2026-08-28
 progress:
-  total_phases: 1
+  total_phases: 0
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
   percent: 0
-current_phase: 02
-current_phase_name: state-validation-drift-diagnostics
 ---
 
 # Project State
@@ -29,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 ## Current Position
 
-Phase: Milestone v1.1 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-08-22 — Milestone v1.1 completed and archived
+Status: Defining requirements
+Last activity: 2026-08-28 — Milestone v1.2 started
 
 ## Performance Metrics
 
