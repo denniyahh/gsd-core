@@ -7,14 +7,14 @@ REMOTE_DIR="${GSD_CI_REMOTE_DIR:-~/builds/gsd-core}"
 LOCAL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Quick connectivity probe (1 second timeout)
-if ! ssh -q -o ConnectTimeout=2 -o BatchMode=yes "$REMOTE" exit 0; then
+if ! ssh -T -q -o ConnectTimeout=2 -o BatchMode=yes "$REMOTE" exit 0; then
   echo "❌ Error: Cannot connect to Mac remote '$REMOTE' via SSH." >&2
   echo "Please verify that the Mac is awake and connected to the local network." >&2
   exit 1
 fi
 
 # Ensure remote directory exists
-ssh "$REMOTE" "mkdir -p $REMOTE_DIR ~/.cache"
+ssh -T "$REMOTE" "mkdir -p $REMOTE_DIR/.cache"
 
 # Fast LAN rsync of the working tree. .git is deliberately EXCLUDED and
 # handled separately below: when LOCAL_ROOT is a linked git worktree (not
@@ -110,10 +110,12 @@ if [ -n "\$pids" ]; then
 fi
 CLEANUP
 
+REMOTE_RUN_SCRIPT_LOCAL="$(mktemp)"
+
 cleanup_remote_test_runners() {
-  ssh "$REMOTE" "cat > /tmp/gsd-ci-cleanup.sh" < "$REMOTE_CLEANUP_SCRIPT_LOCAL" 2>&1 || true
-  ssh "$REMOTE" sh /tmp/gsd-ci-cleanup.sh 2>&1 || true
-  rm -f "$REMOTE_GIT_SCRIPT_LOCAL" "$BUNDLE_LOCAL" "$REMOTE_CLEANUP_SCRIPT_LOCAL"
+  ssh -T "$REMOTE" "cat > /tmp/gsd-ci-cleanup.sh" < "$REMOTE_CLEANUP_SCRIPT_LOCAL" 2>&1 || true
+  ssh -T "$REMOTE" sh /tmp/gsd-ci-cleanup.sh 2>&1 || true
+  rm -f "$REMOTE_GIT_SCRIPT_LOCAL" "$BUNDLE_LOCAL" "$REMOTE_CLEANUP_SCRIPT_LOCAL" "$REMOTE_RUN_SCRIPT_LOCAL"
 }
 trap cleanup_remote_test_runners EXIT
 
@@ -136,8 +138,8 @@ trap cleanup_remote_test_runners EXIT
   echo "rm -f '$REMOTE_BUNDLE'"
 } > "$REMOTE_GIT_SCRIPT_LOCAL"
 
-ssh "$REMOTE" "cat > /tmp/gsd-ci-git-adopt.zsh" < "$REMOTE_GIT_SCRIPT_LOCAL"
-ssh "$REMOTE" zsh /tmp/gsd-ci-git-adopt.zsh
+ssh -T "$REMOTE" "cat > /tmp/gsd-ci-git-adopt.zsh" < "$REMOTE_GIT_SCRIPT_LOCAL"
+ssh -T "$REMOTE" zsh /tmp/gsd-ci-git-adopt.zsh
 
 # Compute local package-lock.json hash
 LOCKFILE_HASH="$(sha256sum "$LOCAL_ROOT/package-lock.json" | cut -d' ' -f1)"
@@ -149,43 +151,81 @@ else
   COMMAND="npm run check:env && npm run build && npm run lint:ci && npm test"
 fi
 
-# Execute on Mac with mise-pinned Node 24 and automatic npm ci if lockfile changed.
+# Execute on Mac in a hermetic clean-room environment (Option 1).
 #
-# GIT_CONFIG_GLOBAL/SYSTEM=/dev/null below make every git subprocess the test
-# suite spawns see a clean, default config — never written to ~/.gitconfig.
-# This Mac's real ~/.gitconfig sets both commit.gpgsign=true (signs with an
-# SSH key `mise exec`'s environment can't load, so fixture commits fail with
-# "failed to write commit object") and core.hooksPath=~/.config/git/hooks.
-#
-# An earlier version of this override tried to neutralize just those two
-# keys individually (gpgsign=false, hooksPath repointed at an empty dir).
-# That repointed value was STILL a non-default hooksPath, and dozens of
-# commit-docs-guard and pr-subrepo tests assert default (unset) hooksPath
-# behavior in throwaway repos they create — so the "fix" broke ~25 tests
-# that had nothing to do with gpg signing. Blanking the config files
-# entirely, rather than overriding specific keys, is what GitHub Actions
-# runners actually have (no config at all), so it's the correct target to
-# match rather than a narrower approximation of it.
-ssh -t "$REMOTE" "zsh -lc '
-  cd $REMOTE_DIR &&
-  CACHED_HASH_FILE=~/.cache/gsd-core-pkg-lock.sha256
-  CURRENT_HASH=\"$LOCKFILE_HASH\"
+# Hermeticity guarantees:
+# 1. Non-interactive SSH (`ssh -T`) with no TTY allocation: `process.stdout.isTTY`
+#    evaluates to undefined/false, faithfully matching headless GitHub Actions CI.
+# 2. Non-login shell invocation: sources NO personal dotfiles (~/.zshrc, ~/.zprofile).
+# 3. `env -i`: Completely strips the environment so no personal API keys (Tavily,
+#    Exa, Firecrawl, Google, Anthropic, etc.) or editor/pager configs leak into tests.
+# 4. Scratch HOME directory (`/tmp/gsd-ci-sandbox.XXXXXX`) isolates ~/.gsd, ~/.config,
+#    ~/.gitconfig, and runtime configuration. Cleaned up on exit.
+# 5. Git config blanking: GIT_CONFIG_NOSYSTEM=1, GIT_CONFIG_GLOBAL=/dev/null,
+#    GIT_CONFIG_SYSTEM=/dev/null, and dummy CI author/committer identities.
+# 6. Persistent build cache: npm cache is scoped to `$RESOLVED_REMOTE_DIR/.cache/npm`
+#    and lockfile hash gating skips redundant `npm ci` runs without touching ~/.npm.
+cat > "$REMOTE_RUN_SCRIPT_LOCAL" <<PREAMBLE
+REMOTE_DIR_INPUT="$REMOTE_DIR"
+LOCKFILE_HASH="$LOCKFILE_HASH"
+COMMAND=\$(cat <<'CMD_EOF'
+$COMMAND
+CMD_EOF
+)
+PREAMBLE
 
-  if [ ! -d node_modules ] || [ ! -f \"\$CACHED_HASH_FILE\" ] || [ \"\$(cat \"\$CACHED_HASH_FILE\")\" != \"\$CURRENT_HASH\" ]; then
-    echo \"🔄 Lockfile change or clean install detected. Running npm ci on Mac...\"
-    mise exec -- npm ci --silent
-    rm -f tsconfig.build.tsbuildinfo
-    mise exec -- npm run build:lib --silent
-    echo \"\$CURRENT_HASH\" > \"\$CACHED_HASH_FILE\"
-  fi
+cat >> "$REMOTE_RUN_SCRIPT_LOCAL" <<'RUNSCRIPT'
+set -euo pipefail
 
-  if [ ! -d gsd-core/bin/lib ] || [ -z \"\$(ls -A gsd-core/bin/lib 2>/dev/null)\" ]; then
-    mise exec -- npm run build:lib --silent
-  fi
+RESOLVED_REMOTE_DIR="${REMOTE_DIR_INPUT/#\~/$HOME}"
+RESOLVED_REMOTE_DIR="$(cd "$RESOLVED_REMOTE_DIR" && pwd)"
+cd "$RESOLVED_REMOTE_DIR"
 
-  export GIT_CONFIG_GLOBAL=/dev/null
-  export GIT_CONFIG_SYSTEM=/dev/null
+mkdir -p "$RESOLVED_REMOTE_DIR/.cache/npm"
+CACHED_HASH_FILE="$RESOLVED_REMOTE_DIR/.cache/gsd-core-pkg-lock.sha256"
 
-  echo \"🚀 Running CI command on Mac: $COMMAND\"
-  mise exec -- $COMMAND
-'"
+NODE_BIN="$(dirname "$(/usr/local/opt/mise/bin/mise which node 2>/dev/null || mise which node 2>/dev/null || which node)")"
+SCRATCH_HOME="$(mktemp -d /tmp/gsd-ci-sandbox.XXXXXX)"
+trap 'rm -rf "$SCRATCH_HOME"' EXIT
+
+clean_exec() {
+  local cmd="$1"
+  env -i \
+    HOME="$SCRATCH_HOME" \
+    TMPDIR="/tmp" \
+    PATH="$NODE_BIN:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    USER="ci" \
+    CI="true" \
+    TERM="dumb" \
+    LANG="en_US.UTF-8" \
+    LC_ALL="en_US.UTF-8" \
+    npm_config_cache="$RESOLVED_REMOTE_DIR/.cache/npm" \
+    GIT_CONFIG_NOSYSTEM="1" \
+    GIT_CONFIG_GLOBAL="/dev/null" \
+    GIT_CONFIG_SYSTEM="/dev/null" \
+    GIT_AUTHOR_NAME="CI" \
+    GIT_AUTHOR_EMAIL="ci@example.com" \
+    GIT_COMMITTER_NAME="CI" \
+    GIT_COMMITTER_EMAIL="ci@example.com" \
+    sh -c "cd '$RESOLVED_REMOTE_DIR' && $cmd"
+}
+
+if [ ! -d node_modules ] || [ ! -f "$CACHED_HASH_FILE" ] || [ "$(cat "$CACHED_HASH_FILE" 2>/dev/null)" != "$LOCKFILE_HASH" ]; then
+  echo "🔄 Lockfile change or clean install detected. Running npm ci on Mac..."
+  clean_exec "npm ci --silent"
+  rm -f tsconfig.build.tsbuildinfo
+  clean_exec "npm run build:lib --silent"
+  echo "$LOCKFILE_HASH" > "$CACHED_HASH_FILE"
+fi
+
+if [ ! -d gsd-core/bin/lib ] || [ -z "$(ls -A gsd-core/bin/lib 2>/dev/null)" ]; then
+  clean_exec "npm run build:lib --silent"
+fi
+
+echo "🚀 Running CI command in clean-room environment on Mac: $COMMAND"
+clean_exec "$COMMAND"
+RUNSCRIPT
+
+ssh -T "$REMOTE" "cat > /tmp/gsd-ci-run.zsh" < "$REMOTE_RUN_SCRIPT_LOCAL"
+ssh -T "$REMOTE" zsh /tmp/gsd-ci-run.zsh
+
