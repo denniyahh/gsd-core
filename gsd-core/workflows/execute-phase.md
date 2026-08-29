@@ -105,6 +105,7 @@ Read runtime/worktree config and fail closed before any executor dispatch:
 ```bash
 RUNTIME=$(gsd_run query config-get runtime --default claude --raw 2>/dev/null || echo "claude")
 USE_WORKTREES=$(gsd_run query config-get workflow.use_worktrees --raw 2>/dev/null || echo "true")
+SESSION_OUTLIVES_TURN=$(gsd_run query config-get workflow.session_outlives_turn --raw 2>/dev/null || echo "true")
 EXECUTOR_STALL_INTERVAL_MINUTES=$(gsd_run query config-get executor.stall_detect_interval_minutes --raw 2>/dev/null || echo "5")
 EXECUTOR_STALL_THRESHOLD_MINUTES=$(gsd_run query config-get executor.stall_threshold_minutes --raw 2>/dev/null || echo "10")
 
@@ -625,6 +626,10 @@ increases monotonically across waves. `{status}` is `complete` (success),
    # CORRECT: one Agent() per message with run_in_background: true
    # WRONG: multiple Agent() calls in one message -> .git/config.lock contention
    ```
+
+   Read and follow `execute-phase/steps/session-survivability-dispatch.md` for the
+   executor-only `SESSION_OUTLIVES_TURN` branch. It supplies literal background
+   and foreground Agent calls; verifier dispatch and isolation selection stay here.
 
    ```text
    Agent(
