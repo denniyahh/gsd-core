@@ -77,13 +77,21 @@ describe('#3159: session-survivability executor dispatch', () => {
     const dispatch = fs.readFileSync(SESSION_DISPATCH_PATH, 'utf8');
     assert.match(workflow, /SESSION_OUTLIVES_TURN=\$\(gsd_run query config-get workflow\.session_outlives_turn/);
     assert.match(workflow, /session-survivability-dispatch\.md/);
-    const falseRegion = dispatch.slice(dispatch.indexOf('When `SESSION_OUTLIVES_TURN` is `false`'));
-    const trueRegion = dispatch.slice(dispatch.indexOf('When `SESSION_OUTLIVES_TURN` is absent'), dispatch.indexOf('When `SESSION_OUTLIVES_TURN` is `false`'));
-    assert.match(falseRegion, /run_in_background: false/);
-    assert.match(falseRegion, /await executor_result/);
-    assert.doesNotMatch(falseRegion, /run_in_background: true/);
-    assert.match(trueRegion, /run_in_background: true/);
-    assert.doesNotMatch(trueRegion, /run_in_background: false/);
+    const trueAnchor = dispatch.indexOf('When `SESSION_OUTLIVES_TURN` is `true`');
+    const falseAnchor = dispatch.indexOf('When `SESSION_OUTLIVES_TURN` is `false`');
+    assert.ok(trueAnchor !== -1, 'true anchor must exist in dispatch fragment');
+    assert.ok(falseAnchor !== -1, 'false anchor must exist in dispatch fragment');
+    assert.ok(trueAnchor < falseAnchor, 'true branch precedes false branch');
+
+    const trueRegion = dispatch.slice(trueAnchor, falseAnchor);
+    const falseRegion = dispatch.slice(falseAnchor);
+
+    assert.match(trueRegion, /run_in_background:\s*true/);
+    assert.doesNotMatch(trueRegion, /run_in_background:\s*false/);
+
+    assert.match(falseRegion, /run_in_background:\s*false/);
+    assert.match(falseRegion, /synchronously/);
+    assert.doesNotMatch(falseRegion, /run_in_background:\s*true/);
   });
 
   test('carries the resolved mode to worktree process dispatch without touching verifier dispatch', () => {

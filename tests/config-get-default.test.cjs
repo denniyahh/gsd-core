@@ -301,9 +301,14 @@ describe('config-get --default flag (#1893)', () => {
       assert.equal(result, 'true', 'must return the registry default, not error');
     });
 
-    test('session-survivability default is true when absent and remains distinct from false', () => {
+    test('session-survivability default is true when absent, omitted from workflow object, and remains distinct from false', () => {
       assert.equal(runRaw('config-get', 'workflow.session_outlives_turn'), 'true');
       fs.mkdirSync(planningDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(planningDir, 'config.json'),
+        JSON.stringify({ workflow: {} }),
+      );
+      assert.equal(runRaw('config-get', 'workflow.session_outlives_turn'), 'true', 'omitted from workflow block falls back to registry default');
       fs.writeFileSync(
         path.join(planningDir, 'config.json'),
         JSON.stringify({ workflow: { session_outlives_turn: false } }),

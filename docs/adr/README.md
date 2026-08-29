@@ -257,6 +257,7 @@ These govern the system as it stands. Cite these.
 | [ADR-2866](2866-install-surface-resolution.md) | Install-surface resolution — the install pipeline resolves `(runtime × scope × trigger)` as a value | Accepted | — |
 | [ADR-2966](2966-loop-qa-walk.md) | Test the five-step loop as a continuous walk, not isolated points | Accepted | — |
 | [ADR-2980](2980-payload-carried-error-is-a-degraded-result.md) | A payload-carried `error` key is a degraded result, not a fault | Accepted | — |
+| [ADR-3159](3159-executor-session-survivability-dispatch.md) | Executor Session Survivability Dispatch | Accepted | — |
 | [ADR-3180](3180-planning-semantic-model-single-owner.md) | Planning Semantic Model — Single Owner per Derivation | Accepted | — |
 | [ADR-3212](3212-lexical-seam-consolidation.md) | The Lexical Seam — Safe Pattern Construction, Line-Terminator Normalization, and Tokenizer-First Stateful Grammars | Accepted | — |
 | [ADR-3408](3408-state-write-path-preservation.md) | STATE.md Write Path — One Declared Policy, One Write Seam | Accepted | — |
@@ -286,7 +287,6 @@ Decided in principle, not yet ratified. Do not cite as settled architecture.
 | [ADR-1671](1671-dynamic-context-management-platform.md) | Dynamic context management platform | Proposed | — |
 | [ADR-1953](1953-complexity-triggered-refactor.md) | Complexity-triggered refactor — the loop measures the entropy it just added | Proposed | — |
 | [ADR-3128](3128-adaptive-runtime-evidence.md) | Adaptive runtime evidence for GSD Debug | Proposed | — |
-| [ADR-3159](3159-executor-session-survivability-dispatch.md) | Executor Session Survivability Dispatch | Proposed | — |
 | [ADR-3646](3646-per-task-content-resolution-seam.md) | Per-task external-tracker content-resolution seam | Proposed | — |
 | [ADR-3889](3889-process-exit-contract.md) | One exit-code registry — 0 and 1 are free, everything else is allocated | Proposed | — |
 | [ADR-3942](3942-emitted-drift-ack-commit-trailer.md) | The emitted-drift acknowledgment is PR-lifetime data — it belongs in a commit trailer, not the working tree | Proposed | — |

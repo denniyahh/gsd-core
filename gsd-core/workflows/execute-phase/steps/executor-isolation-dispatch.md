@@ -325,7 +325,7 @@ fi
 
 `worktree create` records the entry in `$WAVE_WORKTREE_MANIFEST` itself, so **do not** call `worktree.record-agent` for these plans — that verb is the harness-path counterpart, used because the harness creates the worktree behind GSD's back. Double-recording is deduped by path+branch, but the create verb is the single writer here.
 
-Consume the already-resolved `SESSION_OUTLIVES_TURN` mode without re-reading configuration. When it is `true`, spawn `EXEC_JSON`'s `command` + `args` in the background with its working directory set to `EXEC_JSON.cwd`; the cwd is returned for **every** host, including descriptors with `cwdFlag: null`. When it is `false`, run that same resolved command synchronously in the foreground and wait for completion before starting another executor. The worktree creation, ownership, merge, and cleanup steps remain unchanged.
+Consume the already-resolved `SESSION_OUTLIVES_TURN` mode without re-reading configuration. When it is `true`, spawn `EXEC_JSON`'s `command` + `args` in the background with its working directory set to `EXEC_JSON.cwd` and wait for all spawned executors in the wave before merging; the cwd is returned for **every** host, including descriptors with `cwdFlag: null`. When it is `false`, run that same resolved command synchronously in the foreground and wait for completion before starting another executor. The worktree creation, ownership, merge, and cleanup steps remain unchanged.
 
 The executor never touches `STATE.md`/`ROADMAP.md`, and that guard needs no new code — `execute-plan` auto-detects worktree mode via the `IS_WORKTREE` (`.git`-is-a-file) primitive, which a GSD-created worktree trips identically to a harness-created one.
 

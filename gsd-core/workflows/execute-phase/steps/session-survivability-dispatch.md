@@ -6,7 +6,7 @@ change verifier dispatch, isolation selection, or worktree ownership.
 
 ## harness Agent dispatch
 
-When `SESSION_OUTLIVES_TURN` is absent or `true`, retain the existing
+When `SESSION_OUTLIVES_TURN` is `true` (default), retain the existing
 asynchronous executor contract:
 
 ```text
@@ -18,8 +18,8 @@ Agent(
 )
 ```
 
-When `SESSION_OUTLIVES_TURN` is `false`, make the executor foreground and
-collect its result before the next executor is dispatched:
+When `SESSION_OUTLIVES_TURN` is `false`, make the executor foreground and wait
+for its completion before dispatching the next plan's executor:
 
 ```text
 executor_result = Agent(
@@ -28,8 +28,10 @@ executor_result = Agent(
   run_in_background: false,
   prompt="{EXECUTOR_PROMPT}"
 )
-await executor_result
 ```
+
+The call blocks and returns the executor's result synchronously. Do not dispatch
+the next plan's executor until this call has returned.
 
 ## orchestrator-worktree process dispatch
 

@@ -1,6 +1,6 @@
-# ADR-3159: Executor Session Survivability Dispatch [Proposed]
+# ADR-3159: Executor Session Survivability Dispatch [Accepted]
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-29
 - **Issue:** [#3159](https://github.com/open-gsd/gsd-core/issues/3159)
 - **Relates to:** [#3158](https://github.com/open-gsd/gsd-core/issues/3158)
@@ -25,14 +25,14 @@ Introduce an explicit, default-preserving configuration key and literal dispatch
 
 Add `workflow.session_outlives_turn` as a centrally registered boolean configuration key:
 - **Default:** `true`. When absent or explicitly `true`, GSD preserves the standard asynchronous background dispatch across all supported executor backends.
-- **Opt-out:** `false`. When explicitly set to `false`, GSD switches to a foreground, awaited execution path.
-- Non-boolean values are rejected at the configuration boundary.
+- **Opt-out:** `false`. When explicitly set to `false`, GSD switches to a foreground, synchronous execution path.
+- Non-boolean values passed via `gsd config-set` are rejected; hand-edited values in `.planning/config.json` normalize to the default `true` path at workflow execution time.
 
 ### 2. Literal Foreground Dispatch with Awaiting (D-02)
 
 When `workflow.session_outlives_turn` is `false`:
-- **Harness Agent backend (`session-survivability-dispatch.md`):** Dispatches `gsd-executor` with an explicit, literal `run_in_background: false` instruction and awaits the result before the next plan executor is invoked. Subagents are retained; execution is not forced inline into the orchestrator prompt.
-- **Orchestrator-worktree process backend (`executor-isolation-dispatch.md`):** Spawns the executor child process synchronously in the foreground and waits for completion before proceeding, while preserving worktree ownership and cleanup contracts.
+- **Harness Agent backend (`session-survivability-dispatch.md`):** Dispatches `gsd-executor` with an explicit, literal `run_in_background: false` instruction; the tool call returns synchronously before the next plan executor is dispatched. Subagents are retained; execution is not forced inline into the orchestrator prompt.
+- **Orchestrator-worktree process backend (`executor-isolation-dispatch.md`):** Spawns the executor child process synchronously in the foreground and waits for completion before proceeding, while preserving worktree ownership, wave merging, and cleanup contracts.
 - Both true and false branches are expressed as distinct literal instructions in workflow fragments rather than relying on placeholder interpolation or omitted flags.
 
 ### 3. Scope Fence (D-03)
@@ -50,5 +50,5 @@ This configuration governs **executor dispatch only**:
 
 ## Consequences & Verification Limits
 
-- **Consequences:** Integrators on one-shot wrapper hosts can safely execute GSD phases sequentially by configuring `workflow.session_outlives_turn: false` without forfeiting subagent isolation or breaking defaults for long-running hosts.
+- **Consequences:** Integrators on one-shot wrapper hosts can safely execute GSD phases sequentially by configuring `workflow.session_outlives_turn: false` without forfeiting subagent isolation or breaking defaults for long-running hosts. Setting `session_outlives_turn: false` runs multi-plan waves sequentially in the foreground; wall-clock execution scales with total plan count rather than wave parallelization. Combining `session_outlives_turn: false` with `workflow.use_worktrees: true` uses an isolated worktree sequentially for each plan. Post-wave validation gates, merges, and cleanup continue to execute at the wave boundary.
 - **Verification Limits:** Automated unit, workflow-product, and runtime-converter tests verify that configuration and canonical instructions emit the correct literal branches. They do **not** simulate live process termination of arbitrary external wrapper hosts, which remains a host integration concern.
