@@ -36,11 +36,15 @@ created: 2026-08-28
 
 ## Per-Task Verification Map
 
+**Task 03-01-01 baseline:** `upstream/next` = `b811ea16fc4a044dc16b36af91d7cee9d5375727` (fetched and confirmed as an ancestor of the implementation branch on 2026-08-29).
+
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 03-01-01 | 01 | 1 | SESSION-01, SESSION-02 | T-03-01 | Invalid values cannot coerce into a lifecycle mode; absent, true, and false remain distinct. | CLI integration | `node --test tests/config.test.cjs tests/config-get-default.test.cjs` | ✅ | ⬜ pending |
-| 03-01-02 | 01 | 1 | SESSION-01, SESSION-02, QUALITY-03 | T-03-02 | Executor-only false mode contains an explicit awaited foreground dispatch while default/true retains background dispatch. | Workflow-product and projection | `node --test tests/execute-phase-active-flags.test.cjs tests/runtime-converters.test.cjs` | ✅ | ⬜ pending |
-| 03-01-03 | 01 | 1 | SESSION-03, COMPAT-01 | — | ADR, configuration reference, derived index, and install projections are synchronized. | Generator and install integration | `node scripts/gen-adr-index.cjs --check && npm run lint:generated-sync && npm run test:install` | ✅ | ⬜ pending |
+| 03-01-01 | 01 | 1 | — | — | Establish the current upstream/next implementation baseline without overwriting local work. | Preflight | `git fetch upstream && git merge-base --is-ancestor upstream/next HEAD && git diff --check && npm run check:env` | ✅ | ⬜ pending |
+| 03-01-02 | 01 | 1 | SESSION-01, SESSION-02, QUALITY-03 | T-03-01, T-03-02, T-03-03 | Executor-only false mode contains an explicit awaited foreground dispatch while default/true retains background dispatch. | Configuration and workflow-product | `npm run build:lib && node --test tests/config.test.cjs tests/config-get-default.test.cjs tests/execute-phase-active-flags.test.cjs` | ✅ | ⬜ pending |
+| 03-02-01 | 02 | 2 | SESSION-03 | — | ADR and generated index remain synchronized. | Generator | `node scripts/gen-adr-index.cjs --check && npm run lint:generated-sync` | ✅ | ⬜ pending |
+| 03-02-02 | 02 | 2 | QUALITY-03, COMPAT-01 | T-03-02, T-03-03 | Runtime conversion and install projections preserve both dispatch directions. | Projection and install integration | `npm run build:lib && node --test tests/runtime-converters.test.cjs tests/adr-index-gate.test.cjs && npm run test:install && npm run lint:generated-sync` | ✅ | ⬜ pending |
+| 03-02-03 | 02 | 2 | — | — | Complete post-verification ship handoff only after a real PR exists and the generated changeset passes lint. | Ship handoff | `GITHUB_BASE_REF=next node scripts/changeset/lint.cjs` | ✅ | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
