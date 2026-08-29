@@ -18,6 +18,9 @@ const path = require('path');
 const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 const COMMAND_PATH = path.join(__dirname, '..', 'commands', 'gsd', 'execute-phase.md');
+const WORKFLOW_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
+const SESSION_DISPATCH_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'session-survivability-dispatch.md');
+const ISOLATION_DISPATCH_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'executor-isolation-dispatch.md');
 
 describe('execute-phase command: active flags are explicit', () => {
   test('command file exists', () => {
@@ -65,6 +68,32 @@ describe('execute-phase command: active flags are explicit', () => {
       content.includes('If none of these tokens appear, run the standard full-phase execution flow'),
       'context should define the no-flags fallback behavior'
     );
+  });
+});
+
+describe('#3159: session-survivability executor dispatch', () => {
+  test('resolves once and supplies literal opposite-control harness branches', () => {
+    const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+    const dispatch = fs.readFileSync(SESSION_DISPATCH_PATH, 'utf8');
+    assert.match(workflow, /SESSION_OUTLIVES_TURN=\$\(gsd_run query config-get workflow\.session_outlives_turn/);
+    assert.match(workflow, /session-survivability-dispatch\.md/);
+    const falseRegion = dispatch.slice(dispatch.indexOf('When `SESSION_OUTLIVES_TURN` is `false`'));
+    const trueRegion = dispatch.slice(dispatch.indexOf('When `SESSION_OUTLIVES_TURN` is absent'), dispatch.indexOf('When `SESSION_OUTLIVES_TURN` is `false`'));
+    assert.match(falseRegion, /run_in_background: false/);
+    assert.match(falseRegion, /await executor_result/);
+    assert.doesNotMatch(falseRegion, /run_in_background: true/);
+    assert.match(trueRegion, /run_in_background: true/);
+    assert.doesNotMatch(trueRegion, /run_in_background: false/);
+  });
+
+  test('carries the resolved mode to worktree process dispatch without touching verifier dispatch', () => {
+    const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+    const isolation = fs.readFileSync(ISOLATION_DISPATCH_PATH, 'utf8');
+    assert.match(isolation, /already-resolved `SESSION_OUTLIVES_TURN` mode without re-reading configuration/);
+    assert.match(isolation, /true.*background[\s\S]*false.*synchronously[\s\S]*wait/s);
+    assert.doesNotMatch(isolation, /workflow\.session_outlives_turn/);
+    const verifierRegion = workflow.slice(workflow.indexOf('<step name="verify_phase_goal">'));
+    assert.doesNotMatch(verifierRegion, /session_outlives_turn/);
   });
 });
 
