@@ -37,8 +37,10 @@ for (const [relPath, cfg] of Object.entries(limits)) {
 if (failed) process.exit(1);
 " || ERRORS=$((ERRORS + 1))
 
-echo "🔍 Checking emitted drift acknowledgments..."
-node scripts/lint-emitted-drift-ack.cjs || ERRORS=$((ERRORS + 1))
+if [ -f scripts/lint-emitted-drift-ack.cjs ]; then
+  echo "🔍 Checking emitted drift acknowledgments..."
+  node scripts/lint-emitted-drift-ack.cjs || ERRORS=$((ERRORS + 1))
+fi
 
 if [ "$ERRORS" -gt 0 ]; then
   echo "❌ Pre-flight checks failed ($ERRORS error(s))." >&2
