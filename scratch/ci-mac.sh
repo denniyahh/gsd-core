@@ -227,6 +227,7 @@ clean_exec() {
     LC_ALL="en_US.UTF-8" \
     GSD_EMITTED_BASE="upstream/next" \
     GSD_AFFECTED_BASE="upstream/next" \
+    MISE_YES="1" \
     npm_config_cache="$RESOLVED_REMOTE_DIR/.cache/npm" \
     GIT_CONFIG_NOSYSTEM="1" \
     GIT_CONFIG_GLOBAL="/dev/null" \
