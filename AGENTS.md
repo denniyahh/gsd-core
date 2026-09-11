@@ -82,6 +82,7 @@ This is a contributor planning workspace for `@opengsd/gsd-core`, the workflow a
 - Use Node.js >=22 and npm >=10, then install the lockfile graph with `npm ci`; the environment gate in `scripts/check-env.cjs` validates engines, lockfile presence, and lockfile synchronization.
 - Keep Git available for tests and repository/worktree behavior, and keep system `tar` available when exercising capability package installation paths in `src/capability-source.cts`.
 - Linux, macOS, and Windows are supported and tested; the CI matrices in `.github/workflows/test.yml` and `.github/workflows/install-smoke.yml` cover Ubuntu, macOS, and Windows with Node 22/24.
+- “Run local mac CI tests” means run the PR worktree's `scratch/check-workflow-budgets.sh` pre-flight script. Treat its workflow-budget and emitted-drift checks as required before pushing unless the operator says otherwise.
 - Run `npm run build:lib` before directly invoking generated `gsd-core/bin/lib/*.cjs` modules; normal `prepare`, `pretest`, `prepack`, and first-run recovery paths are defined in `package.json` and `gsd-core/bin/ensure-runtime-build.cjs`.
 - Primary deployment is a public npm package installed globally or into a project/runtime configuration directory by `bin/install.js`; there is no separately hosted application process.
 - Packaged binaries are `gsd-core`, `gsd-tools`, `gsd_run`, and `gsd-mcp-server` as defined in `package.json`; the MCP server is a local stdio child process, not a network listener, per `bin/gsd-mcp-server.js`.

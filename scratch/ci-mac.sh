@@ -51,7 +51,11 @@ ORIGIN_URL="$(git -C "$LOCAL_ROOT" remote get-url origin)"
 UPSTREAM_URL="$(git -C "$LOCAL_ROOT" remote get-url upstream 2>/dev/null || true)"
 
 BUNDLE_LOCAL="$(mktemp)"
-git -C "$LOCAL_ROOT" bundle create -q "$BUNDLE_LOCAL" HEAD
+BUNDLE_REFS=("HEAD")
+if [ -n "$UPSTREAM_URL" ] && git -C "$LOCAL_ROOT" rev-parse --verify upstream/next >/dev/null 2>&1; then
+  BUNDLE_REFS+=("upstream/next")
+fi
+git -C "$LOCAL_ROOT" bundle create -q "$BUNDLE_LOCAL" "${BUNDLE_REFS[@]}"
 REMOTE_BUNDLE=/tmp/gsd-ci-git.bundle
 scp -q "$BUNDLE_LOCAL" "$REMOTE:$REMOTE_BUNDLE"
 
@@ -104,9 +108,17 @@ REMOTE_GIT_SCRIPT_LOCAL="$(mktemp)"
 REMOTE_CLEANUP_SCRIPT_LOCAL="$(mktemp)"
 cat > "$REMOTE_CLEANUP_SCRIPT_LOCAL" <<CLEANUP
 pids=\$(pgrep -f "test-isolatio[n]=process.*test-timeou[t]=0" 2>/dev/null || true)
-if [ -n "\$pids" ]; then
-  echo "🧹 killing leaked test-runner worker(s) on $REMOTE: \$pids" >&2
-  kill -TERM \$pids 2>/dev/null || true
+runner_pids=\$(pgrep -f "builds/gsd-core.*node.*scripts/run-test[s]" 2>/dev/null || true)
+all_pids=\$(echo "\$pids \$runner_pids" | tr -s ' ' '\n' | sort -u | grep -v '^\$' || true)
+if [ -n "\$all_pids" ]; then
+  echo "🧹 killing leaked test-runner worker(s) on $REMOTE: \$all_pids" >&2
+  kill -TERM \$all_pids 2>/dev/null || true
+  sleep 1
+  surviving_pids=\$(echo "\$all_pids" | while read -r pid; do kill -0 "\$pid" 2>/dev/null && echo "\$pid"; done || true)
+  if [ -n "\$surviving_pids" ]; then
+    echo "🚨 escalating to SIGKILL for unresponsive worker(s) on $REMOTE: \$surviving_pids" >&2
+    kill -9 \$surviving_pids 2>/dev/null || true
+  fi
 fi
 CLEANUP
 
@@ -118,6 +130,10 @@ cleanup_remote_test_runners() {
   rm -f "$REMOTE_GIT_SCRIPT_LOCAL" "$BUNDLE_LOCAL" "$REMOTE_CLEANUP_SCRIPT_LOCAL" "$REMOTE_RUN_SCRIPT_LOCAL"
 }
 trap cleanup_remote_test_runners EXIT
+
+# Run pre-flight sweep before starting new CI run
+ssh -T "$REMOTE" "cat > /tmp/gsd-ci-cleanup.sh" < "$REMOTE_CLEANUP_SCRIPT_LOCAL" 2>&1 || true
+ssh -T "$REMOTE" sh /tmp/gsd-ci-cleanup.sh 2>&1 || true
 
 {
   echo "set -e"
@@ -131,7 +147,11 @@ trap cleanup_remote_test_runners EXIT
   if [ -n "$UPSTREAM_URL" ]; then
     echo "git remote set-url upstream '$UPSTREAM_URL' 2>/dev/null || git remote add upstream '$UPSTREAM_URL'"
   fi
-  echo "git fetch --quiet '$REMOTE_BUNDLE' HEAD"
+  if [ -n "$UPSTREAM_URL" ] && git -C "$LOCAL_ROOT" rev-parse --verify upstream/next >/dev/null 2>&1; then
+    echo "git fetch --quiet '$REMOTE_BUNDLE' HEAD 'refs/remotes/upstream/next:refs/remotes/upstream/next' 'refs/remotes/upstream/next:refs/remotes/origin/next'"
+  else
+    echo "git fetch --quiet '$REMOTE_BUNDLE' HEAD"
+  fi
   echo "git reset --mixed --quiet FETCH_HEAD"
   echo "git branch -M '$LOCAL_BRANCH'"
   echo "git add -A"
@@ -148,7 +168,13 @@ LOCKFILE_HASH="$(sha256sum "$LOCAL_ROOT/package-lock.json" | cut -d' ' -f1)"
 if [ $# -gt 0 ]; then
   COMMAND="$*"
 else
-  COMMAND="npm run check:env && npm run build && npm run lint:ci && npm test"
+  # The Mac runner executes all test chunks serially. Its timing table can lag
+  # behind expensive state/property suites, which packed state.test.cjs with
+  # enough peers to exceed run-tests' fixed 600s per-chunk cap. Halve the
+  # chunk-weight budget here without changing the repository default; callers
+  # may tune it further through the local GSD_CI_RUN_TESTS_MAX_FILES_PER_CHUNK.
+  TEST_CHUNK_WEIGHT="${GSD_CI_RUN_TESTS_MAX_FILES_PER_CHUNK:-30}"
+  COMMAND="npm run check:env && npm run build && npm run lint:ci && RUN_TESTS_MAX_FILES_PER_CHUNK=${TEST_CHUNK_WEIGHT} npm test"
 fi
 
 # Execute on Mac in a hermetic clean-room environment (Option 1).
@@ -199,6 +225,8 @@ clean_exec() {
     TERM="dumb" \
     LANG="en_US.UTF-8" \
     LC_ALL="en_US.UTF-8" \
+    GSD_EMITTED_BASE="upstream/next" \
+    GSD_AFFECTED_BASE="upstream/next" \
     npm_config_cache="$RESOLVED_REMOTE_DIR/.cache/npm" \
     GIT_CONFIG_NOSYSTEM="1" \
     GIT_CONFIG_GLOBAL="/dev/null" \
@@ -213,14 +241,15 @@ clean_exec() {
 if [ ! -d node_modules ] || [ ! -f "$CACHED_HASH_FILE" ] || [ "$(cat "$CACHED_HASH_FILE" 2>/dev/null)" != "$LOCKFILE_HASH" ]; then
   echo "🔄 Lockfile change or clean install detected. Running npm ci on Mac..."
   clean_exec "npm ci --silent"
-  rm -f tsconfig.build.tsbuildinfo
-  clean_exec "npm run build:lib --silent"
   echo "$LOCKFILE_HASH" > "$CACHED_HASH_FILE"
 fi
 
-if [ ! -d gsd-core/bin/lib ] || [ -z "$(ls -A gsd-core/bin/lib 2>/dev/null)" ]; then
-  clean_exec "npm run build:lib --silent"
-fi
+# rsync intentionally preserves the emitted runtime and incremental state so
+# dependency installation is cached. Source changes otherwise leave tsc with a
+# cache that can claim the old emitted CJS is current (#4316 Mac CI). Invalidate
+# only the rebuildable incremental state, then compile the synced source once.
+rm -f tsconfig.build.tsbuildinfo
+clean_exec "npm run build:lib --silent"
 
 echo "🚀 Running CI command in clean-room environment on Mac: $COMMAND"
 clean_exec "$COMMAND"
@@ -228,4 +257,3 @@ RUNSCRIPT
 
 ssh -T "$REMOTE" "cat > /tmp/gsd-ci-run.zsh" < "$REMOTE_RUN_SCRIPT_LOCAL"
 ssh -T "$REMOTE" zsh /tmp/gsd-ci-run.zsh
-

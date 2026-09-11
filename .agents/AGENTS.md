@@ -9,14 +9,15 @@
 
 ## 2. Environment & Tooling
 * **Tool Manager**: Use `mise` for Node 22 and task management.
-* **Remote CI Runner**: Pre-flight verification routes automatically to the local Mac runner via `mise run check` / `scratch/ci-mac.sh`.
+* **Remote CI Runner & CI Execution Requirement (MANDATORY)**:
+  * Whenever CI, tests, or pre-PR verification is requested or needed, **ALWAYS run the Mac-ci script located in the scratch directory (`scratch/ci-mac.sh` or `mise run check` / `mise run ci:mac` / `mise run test:mac`), NEVER run the local Aurora CI/test commands directly on this host**.
+  * The Mac runner executes in a hermetic clean-room environment (`ssh -T mac`), protecting against host environment leakage and process-hanging issues on Aurora.
+  * Running full CI: `./scratch/ci-mac.sh` (or `mise run check` to check budget + run full CI).
+  * Running focused/targeted tests on Mac: `./scratch/ci-mac.sh "<command>"` (e.g. `./scratch/ci-mac.sh "node --test tests/config.test.cjs"` or `mise run test:mac`).
 * **Branch & Worktree Setup Helper**: Use `mise run start:wt <type> <issue-number> <slug>` (e.g. `mise run start:wt fix 2783 wedged-pr-note`) to create task worktrees off `upstream/next` populated with personal workflow capabilities.
 * **Pre-flight & Pre-push Commands (STRICT ENFORCEMENT)**:
   * Check environment & workflow budgets: `mise run check:budget` (checks ADR-857 `execute-phase.md` ≤ 93,400 bytes, `plan-phase.md` ≤ 94,519 bytes, and drift acks)
-  * Full build: `npm run build` (or `npm run build:lib`)
-  * Run CI linter: `npm run lint:ci`
-  * Run unit tests: `npm test`
-  * **Rule**: You MUST run `mise run check:budget && npm run build && npm run lint:ci && npm test` (or `mise run check`) before pushing to `origin`.
+  * Pre-push / pre-PR verification rule: Run `mise run check` (or `./scratch/check-workflow-budgets.sh && ./scratch/ci-mac.sh`). Do not run `npm test` or `npm run lint:ci` directly on the local Aurora host for verification.
   * **Workflow Size Ceiling & Delegation Rule**: When modifying host workflows (`execute-phase.md`, `plan-phase.md`), delegate multi-line logic to step fragments (`gsd-core/workflows/<workflow>/steps/*.md` or `capabilities/*/fragments/`) and keep `execute-phase.md` LF byte count strictly ≤ 93,400 bytes.
 
 ## 3. Worktree-Safe Contribution Flow
