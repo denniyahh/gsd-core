@@ -1,0 +1,121 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-09-17T05:02:31-04:00",
+  "context": "research",
+  "phase": "03-configured-session-survivability-dispatch",
+  "phase_dir": ".planning/phases/03-configured-session-survivability-dispatch",
+  "plan": null,
+  "task": null,
+  "total_tasks": null,
+  "status": "blocked",
+  "completed_tasks": [
+    {
+      "id": "assessment",
+      "name": "PR #4035 review-gap assessment and implementation recommendations",
+      "status": "done",
+      "evidence": "Original Codex task 'Assess PR 4035 review gaps'; recommendations consolidated in .planning/.continue-here.md"
+    },
+    {
+      "id": "live-pr-refresh",
+      "name": "Refresh PR #4035 state",
+      "status": "done",
+      "evidence": "2026-09-16 maintainer review at c7855a4; PR open, changes requested, merge conflict reported"
+    }
+  ],
+  "remaining_tasks": [
+    {
+      "id": "maintainer-contracts",
+      "name": "Resolve scope, config-error, and foreground-bound contracts",
+      "status": "blocked"
+    },
+    {
+      "id": "pr-remediation",
+      "name": "Implement the narrow, maintainer-approved PR #4035 remediation in an isolated worktree",
+      "status": "not_started"
+    },
+    {
+      "id": "verification",
+      "name": "Regenerate artifacts, run behavior-focused tests and final-head PR verification",
+      "status": "not_started"
+    },
+    {
+      "id": "follow-up-guardrails",
+      "name": "Propose reusable dispatch-contract and final-head guardrails separately",
+      "status": "not_started"
+    }
+  ],
+  "blockers": [
+    {
+      "description": "PR #4035 has a reported merge conflict against next.",
+      "type": "technical",
+      "workaround": "Resolve only after maintainer contract decisions, then re-verify the PR head and mergeability."
+    },
+    {
+      "description": "Scope is unresolved: the issue is executor-oriented, while HEAD and ADR include verifier dispatch.",
+      "type": "human_action",
+      "workaround": "Maintainer must approve executor-only remediation or explicitly re-approve verifier scope."
+    },
+    {
+      "description": "ADR-3159 says unreadable config selects foreground false; the author intent says preserve default-on true.",
+      "type": "human_action",
+      "workaround": "Maintainer must choose the policy and amend ADR, workflow, docs, and tests together."
+    },
+    {
+      "description": "Foreground dispatch has no enforceable timeout/cancellation; existing stall surveillance cannot run while synchronous Agent() is blocking.",
+      "type": "human_action",
+      "workaround": "Obtain an enforceable host bound, or make the false path unavailable; do not add prose-only surveillance."
+    },
+    {
+      "description": "The local GSD runtime cannot load because gsd-core/bin/lib/quick-batch-command-router.cjs is missing.",
+      "type": "technical",
+      "workaround": "In a clean implementation worktree, build the runtime before invoking gsd-tools and inspect generated drift."
+    }
+  ],
+  "async_jobs": [],
+  "human_actions_pending": [
+    {
+      "action": "Ask the maintainer to choose executor-only vs verifier-inclusive scope.",
+      "context": "Issue #3159 is executor-oriented, but current ADR/HEAD include verifier behavior.",
+      "blocking": true
+    },
+    {
+      "action": "Ask the maintainer to choose unreadable-config semantics and amend ADR-3159 to match.",
+      "context": "Default-on, foreground fallback, and explicit halt are materially different contracts.",
+      "blocking": true
+    },
+    {
+      "action": "Ask the maintainer whether an enforceable host-level foreground time bound exists.",
+      "context": "Without it, session_outlives_turn=false can block indefinitely and disables background polling safeguards.",
+      "blocking": true
+    }
+  ],
+  "decisions": [
+    {
+      "decision": "Do not implement PR #4035 until the three maintainer contracts are resolved.",
+      "rationale": "The current review and ADR conflict, and the false path has an unresolved hang-safety defect."
+    },
+    {
+      "decision": "Use a clean, isolated worktree for implementation.",
+      "rationale": "The current checkout has unrelated modified and untracked files."
+    },
+    {
+      "decision": "Keep reusable policy automation out of the narrow remediation unless a maintainer requests it.",
+      "rationale": "A large guardrail framework would repeat the scope-growth problem under review."
+    }
+  ],
+  "uncommitted_files": [
+    " M scratch/ci-mac.sh",
+    "?? .codex/",
+    "?? scratch/claude-prompt.txt",
+    "?? scratch/claude-review.md",
+    "?? scratch/deepseek-review.md",
+    "?? scratch/final-3159.patch",
+    "?? scratch/pr-3159-body.md",
+    "?? scratch/pr-3159.patch",
+    "?? scratch/review-prompt.txt",
+    "?? scratch/run-adversarial-review.py",
+    "?? scratch/run-claude-focused.py"
+  ],
+  "next_action": "Read .planning/.continue-here.md, refresh the PR's current review/head, and obtain the three maintainer decisions before changing code.",
+  "context_notes": "This handoff was written manually because the pause-work workflow's gsd-tools runtime fails to load. Memtrace MCP was unavailable in this session; do not treat prior Memtrace zero-findings reports as proof of PR correctness."
+}
