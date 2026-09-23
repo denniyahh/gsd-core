@@ -12,15 +12,38 @@
 * **Remote CI Runner & CI Execution Requirement (MANDATORY)**:
   * Whenever CI, tests, or pre-PR verification is requested or needed, **ALWAYS run the Mac-ci script located in the scratch directory (`scratch/ci-mac.sh` or `mise run check` / `mise run ci:mac` / `mise run test:mac`), NEVER run the local Aurora CI/test commands directly on this host**.
   * The Mac runner executes in a hermetic clean-room environment (`ssh -T mac`), protecting against host environment leakage and process-hanging issues on Aurora.
-  * Running full CI: `./scratch/ci-mac.sh` (or `mise run check` to check budget + run full CI).
-  * Running focused/targeted tests on Mac: `./scratch/ci-mac.sh "<command>"` (e.g. `./scratch/ci-mac.sh "node --test tests/config.test.cjs"` or `mise run test:mac`).
+  * Running full CI: `./scratch/ci-mac.sh` (or `mise run check` to check budget + run full CI). Reserve this strictly for pre-push and pre-PR verification.
+  * **Focused Test Discipline (MANDATORY)**: During development, debugging, and iterative TDD, **ALWAYS run focused tests** using `./scratch/test-mac.sh <files...>` or `mise run test:mac <files...>` (e.g. `./scratch/test-mac.sh tests/verify.test.cjs`). Running full CI takes ~2 hours and must NEVER be run when iterating on code changes.
 * **Branch & Worktree Setup Helper**: Use `mise run start:wt <type> <issue-number> <slug>` (e.g. `mise run start:wt fix 2783 wedged-pr-note`) to create task worktrees off `upstream/next` populated with personal workflow capabilities.
 * **Pre-flight & Pre-push Commands (STRICT ENFORCEMENT)**:
-  * Check environment & workflow budgets: `mise run check:budget` (checks ADR-857 `execute-phase.md` ≤ 93,400 bytes, `plan-phase.md` ≤ 94,519 bytes, and drift acks)
+  * Check environment & workflow budgets: `mise run check:budget` (checks ADR-857 Phase 6 ceilings dynamically against `tests/phase6-capstone-conformance.test.cjs`, and drift acks)
   * Pre-push / pre-PR verification rule: Run `mise run check` (or `./scratch/check-workflow-budgets.sh && ./scratch/ci-mac.sh`). Do not run `npm test` or `npm run lint:ci` directly on the local Aurora host for verification.
-  * **Workflow Size Ceiling & Delegation Rule**: When modifying host workflows (`execute-phase.md`, `plan-phase.md`), delegate multi-line logic to step fragments (`gsd-core/workflows/<workflow>/steps/*.md` or `capabilities/*/fragments/`) and keep `execute-phase.md` LF byte count strictly ≤ 93,400 bytes.
+  * **Workflow Size Ceiling & Delegation Rule**: When modifying host workflows (`execute-phase.md`, `plan-phase.md`), delegate multi-line logic to step fragments (`gsd-core/workflows/<workflow>/steps/*.md` or `capabilities/*/fragments/`) and keep host workflow byte counts strictly under the ADR-857 Phase 6 ceilings (`execute-phase.md` < 93,600 bytes, `plan-phase.md` < 98,300 bytes).
 
-## 3. Worktree-Safe Contribution Flow
+## 3. Mandatory Task Lifecycles (Start, Resume, Ship)
+
+### A. Beginning a New Task
+* **Branch off `upstream/next`**: Never branch off `main` or `personal/workspace`.
+* **Use Worktree Helper**: Run `mise run start:wt <type> <issue-number> <slug>` (or `mise run start:task`).
+  * Automates: fetches `upstream/next`, provisions worktree at `../gsd-core-<slug>`, injects personal tooling, sets up `.git/info/exclude` and git hooks, and registers with `memtrace`.
+* **Verify Baseline**: Enter worktree and run `mise run check:budget`.
+
+### B. Resuming Work After a Pause
+* **Run Resumption Helper**: Run `mise run resume:task` (or `./scratch/resume-task.sh`).
+* **Handle Upstream Drift**: If the helper detects commits behind `upstream/next`, rebase: `git rebase upstream/next`.
+* **Verify Working Tree**: Ensure uncommitted changes are accounted for (`git status --short`).
+* **Health Check**: Confirm `memtrace.service` is active and the remote Mac runner is reachable.
+* **Iterate via Focused Tests**: During development and TDD, run `mise run test:mac <files...>` (or `./scratch/test-mac.sh <files...>`). Never run full CI while editing.
+
+### C. Completing a Task & Opening a PR
+* **Focused Tests Pass**: Ensure domain tests pass on Mac (`mise run test:mac <test-paths...>`).
+* **Changeset Created**: Run `npm run changeset` if user-facing changes were introduced. Frontmatter must contain `pr: <issue-number>`.
+* **Run Pre-PR Quality Gate**: Run `mise run ready:pr` (or `mise run pr` / `./scratch/ready-pr.sh`).
+  * Enforces: zero uncommitted changes, contribution publish boundary clean, workflow byte budgets within limits, personal workspace state synced via `push:env`, and full clean-room CI passing 100% on Mac.
+* **Open PR Targeting `upstream/next`**: Use formatted command from `ready:pr` with correct template (`.github/PULL_REQUEST_TEMPLATE/<type>.md`).
+* **CI Verification Guard**: Monitor `gh pr checks <PR_NUMBER> --repo open-gsd/gsd-core`. Never notify maintainers until 100% of checks are green against current `HEAD_SHA`.
+
+## 4. Worktree-Safe Contribution Flow
 * **Sync, then isolate**: Run `mise run sync` in this primary checkout. For AI-assisted work, create the task branch in a separate worktree via `mise run start:wt <type> <issue-number> <slug>`.
 * **Validation**: Run `mise run check` from the task worktree (which automatically syncs and verifies on the Mac runner) before requesting review or opening a PR. Use narrower suites (e.g. `mise run test:mac`) during the edit loop when appropriate.
 * **Publishing**: Push task branches to `origin`; open the upstream PR only after the approved issue, required test evidence, changeset (when applicable), and PR template are ready.

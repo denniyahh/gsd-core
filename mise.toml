@@ -10,7 +10,15 @@ description = "Check environment and build remotely on Mac"
 run = "./scratch/ci-mac.sh npm run check:env && ./scratch/ci-mac.sh npm run build:lib"
 
 [tasks."test:mac"]
-description = "Run test suite remotely on Mac"
+description = "Run focused test file(s) or suite remotely on Mac"
+run = "./scratch/test-mac.sh"
+
+[tasks."test:focus"]
+description = "Run focused test file(s) remotely on Mac"
+run = "./scratch/test-mac.sh"
+
+[tasks."test:all:mac"]
+description = "Run full 43-chunk test suite remotely on Mac (takes ~2h; use test:mac for iteration)"
 run = "./scratch/ci-mac.sh npm test"
 
 [tasks."check:budget"]
@@ -29,6 +37,27 @@ run = "git fetch upstream next && git merge upstream/next"
 description = "Create a new isolated task worktree with Mac CI runner capabilities inherited"
 run = "./scratch/new-worktree.sh"
 
+[tasks."start:task"]
+description = "Alias for start:wt — start a new task worktree"
+run = "./scratch/new-worktree.sh"
+
+[tasks."resume:task"]
+description = "Resume work on active task: check hygiene, upstream drift, runner health, and sync personal env"
+run = "./scratch/resume-task.sh"
+
+[tasks."ready:pr"]
+description = "Run pre-PR quality gates: boundary check, budget check, changeset validation, full Mac CI, and push"
+run = "./scratch/ready-pr.sh"
+
+[tasks."sync:env"]
+description = "Pull latest personal environment (.planning, scratch, .agents) from personal workspace"
+run = "./scratch/sync-personal-env.sh pull"
+
+[tasks."push:env"]
+description = "Reconcile worktree .planning and scratch changes back to personal workspace"
+run = "./scratch/sync-personal-env.sh push"
+
 [tasks.pr]
-description = "Open a Pull Request targeting upstream/next"
-run = "gh pr create --base next --repo open-gsd/gsd-core"
+description = "Pre-PR verification and submission workflow"
+run = "./scratch/ready-pr.sh"
+

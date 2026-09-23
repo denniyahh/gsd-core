@@ -5,13 +5,16 @@
 * `upstream` -> `https://github.com/open-gsd/gsd-core.git` (Official GSD Core)
 
 ## Common Commands (`mise` Tasks)
-* **Start New Worktree**: `mise run start:wt <type> <issue-number> <slug>`
-  * Example: `mise run start:wt fix 2783 wedged-pr-note`
-  * Automates: Fetch `upstream/next` -> Create isolated worktree -> Populate `mise.toml`, `scratch/ci-mac.sh`, and `.agents/` -> Ready for Mac CI testing.
-* **Sync Integration Branch**: `mise run sync` (syncs `next` with `upstream/next`)
-* **Run Pre-flight Checks**: `mise run check` (runs env check + build + unit tests + lint on Mac CI runner)
-* **Run Specific Tests on Mac**: `mise run test:mac` or `./scratch/ci-mac.sh "node scripts/run-tests.cjs --suite unit"`
-* **Create PR**: `mise run pr` (opens PR targeting `upstream/next`)
+* **Start New Task Worktree**: `mise run start:wt <type> <issue-number> <slug>` (or `mise run start:task`)
+  * Example: `mise run start:wt fix 4686 uat-exit-code`
+  * Automates: Fetch `upstream/next` -> Create isolated worktree -> Inject personal capabilities (`mise.toml`, `scratch/`, `.agents/`) -> Configure `.git/info/exclude` & git hooks -> Register with `memtrace`.
+* **Resume Task**: `mise run resume:task` (checks working tree, detects upstream drift, syncs personal env, checks runner & memtrace, verifies byte budgets).
+* **Run Focused Tests on Mac (Iterative TDD)**: `mise run test:mac <files...>` or `./scratch/test-mac.sh <files...>`
+  * Example: `mise run test:mac tests/verify.test.cjs`
+  * Example: `./scratch/test-mac.sh --suite unit`
+  * ALWAYS use focused tests during development; avoid running full CI when iterating.
+* **Pre-PR Verification & Gatekeeper**: `mise run ready:pr` (or `mise run pr`)
+  * Automates: working tree cleanliness -> publish boundary check -> workflow byte budgets -> changeset validation -> personal env reconciliation -> full 100% green Mac CI -> git push -> formats `gh pr create`.
 
 ## Contribution Isolation Contract
 

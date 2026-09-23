@@ -52,15 +52,24 @@ git worktree add -b "$BRANCH" "$WORKTREE_DIR" upstream/next
 
 echo "📦 Injecting personal workflow capabilities (mise.toml, scratch scripts, .agents/)..."
 copy_required_file "$ROOT/mise.toml" "$WORKTREE_DIR/mise.toml"
-copy_required_file "$ROOT/scratch/ci-mac.sh" "$WORKTREE_DIR/scratch/ci-mac.sh"
-copy_required_file "$ROOT/scratch/check-workflow-budgets.sh" "$WORKTREE_DIR/scratch/check-workflow-budgets.sh"
-copy_required_file "$ROOT/scratch/check-publish-boundary.sh" "$WORKTREE_DIR/scratch/check-publish-boundary.sh"
+copy_required_directory "$ROOT/scratch" "$WORKTREE_DIR/scratch"
 copy_required_directory "$ROOT/.agents" "$WORKTREE_DIR/.agents"
 
-# Personal overrides must remain available locally but must never become part of
-# a contribution commit. A tracked override is hidden from status in this
-# worktree's private index; untracked personal files are covered by the push
-# guard and remain unstaged unless explicitly added.
+if [ -d "$ROOT/.planning" ]; then
+  echo "📋 Copying .planning environment from personal workspace..."
+  copy_required_directory "$ROOT/.planning" "$WORKTREE_DIR/.planning"
+fi
+
+# Configure worktree git exclude so personal files remain unstaged and uncommitted
+mkdir -p "$WORKTREE_DIR/.git/info"
+cat > "$WORKTREE_DIR/.git/info/exclude" <<'EOF'
+.agents/
+scratch/
+mise.toml
+.local/
+.planning/
+EOF
+
 if git -C "$WORKTREE_DIR" ls-files --error-unmatch mise.toml >/dev/null 2>&1; then
   git -C "$WORKTREE_DIR" update-index --skip-worktree -- mise.toml
 fi
@@ -98,8 +107,8 @@ cat > "$HOOK_DIR/pre-push" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 
-HOOK_DIR="$(printf '%q' "$HOOK_DIR")"
-WORKTREE_DIR="$(printf '%q' "$WORKTREE_DIR")"
+HOOK_DIR="\$(printf '%q' "$HOOK_DIR")"
+WORKTREE_DIR="\$(printf '%q' "$WORKTREE_DIR")"
 PUSH_INPUT="\$(mktemp "\$HOOK_DIR/push-input.XXXXXX")"
 trap 'rm -f "\$PUSH_INPUT"' EXIT
 cat > "\$PUSH_INPUT"
@@ -109,10 +118,21 @@ if [ -f "\$HOOK_DIR/upstream-pre-push" ]; then
 fi
 bash "\$WORKTREE_DIR/scratch/check-workflow-budgets.sh"
 bash "\$WORKTREE_DIR/scratch/check-publish-boundary.sh" < "\$PUSH_INPUT"
+
+# Reconcile worktree .planning and scratch changes back to personal workspace
+if [ -x "\$WORKTREE_DIR/scratch/sync-personal-env.sh" ]; then
+  bash "\$WORKTREE_DIR/scratch/sync-personal-env.sh" auto || true
+fi
 EOF
 chmod +x "$HOOK_DIR/pre-commit" "$HOOK_DIR/pre-push"
+
+if command -v memtrace >/dev/null 2>&1 && systemctl --user is-active --quiet memtrace 2>/dev/null; then
+  echo "🧠 Registering worktree with memtrace workspace 'personal'..."
+  memtrace workspace add personal "$WORKTREE_DIR" 2>/dev/null || true
+fi
 
 echo "✅ Worktree initialized with Mac CI runner & personal workflow!"
 echo "👉 Next steps:"
 echo "   cd $WORKTREE_DIR"
-echo "   mise run check"
+echo "   mise run test:mac <focused-test-file>   # for TDD iteration"
+echo "   mise run check                         # for final pre-push verification"

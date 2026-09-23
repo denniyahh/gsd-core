@@ -30,6 +30,7 @@ rsync -a --delete \
   --filter='P /.git' \
   --filter='- /node_modules' \
   --filter='- /.local' \
+  --filter='- /.planning' \
   --filter='- /.cache' \
   --filter='- /*.tsbuildinfo' \
   --filter='- /.git' \
@@ -148,10 +149,12 @@ ssh -T "$REMOTE" sh /tmp/gsd-ci-cleanup.sh 2>&1 || true
     echo "git remote set-url upstream '$UPSTREAM_URL' 2>/dev/null || git remote add upstream '$UPSTREAM_URL'"
   fi
   if [ -n "$UPSTREAM_URL" ] && git -C "$LOCAL_ROOT" rev-parse --verify upstream/next >/dev/null 2>&1; then
-    echo "git fetch --quiet '$REMOTE_BUNDLE' HEAD 'refs/remotes/upstream/next:refs/remotes/upstream/next' 'refs/remotes/upstream/next:refs/remotes/origin/next'"
+    echo "git fetch --quiet '$REMOTE_BUNDLE' HEAD '+refs/remotes/upstream/next:refs/remotes/upstream/next' '+refs/remotes/upstream/next:refs/remotes/origin/next'"
   else
     echo "git fetch --quiet '$REMOTE_BUNDLE' HEAD"
   fi
+  echo "mkdir -p .git/info"
+  echo "printf '.agents/\nscratch/\nmise.toml\n.local/\n.planning/\n' > .git/info/exclude"
   echo "git reset --mixed --quiet FETCH_HEAD"
   echo "git branch -M '$LOCAL_BRANCH'"
   echo "git add -A"
