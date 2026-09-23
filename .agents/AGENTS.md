@@ -25,14 +25,14 @@
 ### A. Beginning a New Task
 * **Branch off `upstream/next`**: Never branch off `main` or `personal/workspace`.
 * **Use Worktree Helper**: Run `mise run start:wt <type> <issue-number> <slug>` (or `mise run start:task`).
-  * Automates: fetches `upstream/next`, provisions worktree at `../gsd-core-<slug>`, injects personal tooling, sets up `.git/info/exclude` and git hooks, and registers with `memtrace`.
+  * Automates: fetches `upstream/next`, provisions worktree at `../gsd-core-<slug>`, injects personal tooling, sets up `.git/info/exclude` and git hooks.
 * **Verify Baseline**: Enter worktree and run `mise run check:budget`.
 
 ### B. Resuming Work After a Pause
 * **Run Resumption Helper**: Run `mise run resume:task` (or `./scratch/resume-task.sh`).
 * **Handle Upstream Drift**: If the helper detects commits behind `upstream/next`, rebase: `git rebase upstream/next`.
 * **Verify Working Tree**: Ensure uncommitted changes are accounted for (`git status --short`).
-* **Health Check**: Confirm `memtrace.service` is active and the remote Mac runner is reachable.
+* **Health Check**: Confirm the remote Mac runner is reachable.
 * **Iterate via Focused Tests**: During development and TDD, run `mise run test:mac <files...>` (or `./scratch/test-mac.sh <files...>`). Never run full CI while editing.
 
 ### C. Completing a Task & Opening a PR

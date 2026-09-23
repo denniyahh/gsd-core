@@ -126,11 +126,6 @@ fi
 EOF
 chmod +x "$HOOK_DIR/pre-commit" "$HOOK_DIR/pre-push"
 
-if command -v memtrace >/dev/null 2>&1 && systemctl --user is-active --quiet memtrace 2>/dev/null; then
-  echo "🧠 Registering worktree with memtrace workspace 'personal'..."
-  memtrace workspace add personal "$WORKTREE_DIR" 2>/dev/null || true
-fi
-
 echo "✅ Worktree initialized with Mac CI runner & personal workflow!"
 echo "👉 Next steps:"
 echo "   cd $WORKTREE_DIR"

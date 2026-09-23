@@ -5,7 +5,7 @@ set -euo pipefail
 # 1. Inspects local git working tree hygiene
 # 2. Checks divergence against upstream/next
 # 3. Pulls fresh personal planning & tooling (sync:env)
-# 4. Verifies memtrace service & Mac runner connectivity
+# 4. Verifies Mac runner connectivity
 # 5. Verifies ADR-857 workflow byte ceilings
 # 6. Displays active issue status & focused test guidance
 
@@ -61,15 +61,7 @@ if [ -x "$SCRATCH_DIR/sync-personal-env.sh" ]; then
   echo ""
 fi
 
-# 4. Service & Runner Health
-if command -v systemctl >/dev/null 2>&1; then
-  if systemctl --user is-active --quiet memtrace 2>/dev/null; then
-    echo "🧠 memtrace.service is active and healthy."
-  else
-    echo "⚠️  memtrace.service is NOT running. Run: systemctl --user start memtrace"
-  fi
-fi
-
+# 4. Remote Runner Health
 if ssh -T -q -o ConnectTimeout=2 -o BatchMode=yes mac exit 0 2>/dev/null; then
   echo "🍏 Remote Mac runner ('mac') is awake and reachable."
 else

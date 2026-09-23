@@ -7,8 +7,8 @@
 ## Common Commands (`mise` Tasks)
 * **Start New Task Worktree**: `mise run start:wt <type> <issue-number> <slug>` (or `mise run start:task`)
   * Example: `mise run start:wt fix 4686 uat-exit-code`
-  * Automates: Fetch `upstream/next` -> Create isolated worktree -> Inject personal capabilities (`mise.toml`, `scratch/`, `.agents/`) -> Configure `.git/info/exclude` & git hooks -> Register with `memtrace`.
-* **Resume Task**: `mise run resume:task` (checks working tree, detects upstream drift, syncs personal env, checks runner & memtrace, verifies byte budgets).
+  * Automates: Fetch `upstream/next` -> Create isolated worktree -> Inject personal capabilities (`mise.toml`, `scratch/`, `.agents/`) -> Configure `.git/info/exclude` & git hooks.
+* **Resume Task**: `mise run resume:task` (checks working tree, detects upstream drift, syncs personal env, checks runner, verifies byte budgets).
 * **Run Focused Tests on Mac (Iterative TDD)**: `mise run test:mac <files...>` or `./scratch/test-mac.sh <files...>`
   * Example: `mise run test:mac tests/verify.test.cjs`
   * Example: `./scratch/test-mac.sh --suite unit`
