@@ -16,6 +16,16 @@ fi
 # Ensure remote directory exists
 ssh -T "$REMOTE" "mkdir -p $REMOTE_DIR/.cache"
 
+# Ensure ShellCheck binary is cached on remote (clean-room remote has no external internet access)
+SHELLCHECK_CACHE_DIR="$REMOTE_DIR/node_modules/.cache/shellcheck/v0.11.0"
+if [ -f "$HOME/.cache/gsd-ci/shellcheck-darwin/shellcheck-v0.11.0/shellcheck" ]; then
+  if ! ssh -T "$REMOTE" "test -x $SHELLCHECK_CACHE_DIR/shellcheck"; then
+    ssh -T "$REMOTE" "mkdir -p $SHELLCHECK_CACHE_DIR"
+    scp -q "$HOME/.cache/gsd-ci/shellcheck-darwin/shellcheck-v0.11.0/shellcheck" "$REMOTE:$SHELLCHECK_CACHE_DIR/shellcheck"
+    ssh -T "$REMOTE" "chmod +x $SHELLCHECK_CACHE_DIR/shellcheck"
+  fi
+fi
+
 # Fast LAN rsync of the working tree. .git is deliberately EXCLUDED and
 # handled separately below: when LOCAL_ROOT is a linked git worktree (not
 # the main clone), its .git is a pointer FILE to this machine's own

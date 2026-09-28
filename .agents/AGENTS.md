@@ -36,10 +36,11 @@
 * **Iterate via Focused Tests**: During development and TDD, run `mise run test:mac <files...>` (or `./scratch/test-mac.sh <files...>`). Never run full CI while editing.
 
 ### C. Completing a Task & Opening a PR
+* **Mandatory Final Upstream Drift Gate (STRICT ENFORCEMENT)**: Before running the final pre-PR verification or pushing, always verify that no subsequent commits have landed on `upstream/next` (`git fetch upstream next && git rev-list --count HEAD..upstream/next`). If any commits have landed on `upstream/next` after the one the PR is based on, you **MUST rebase onto `upstream/next` and restart the PR verification process from the beginning**. Never submit, push, or request review on a PR that has fallen behind `upstream/next`.
 * **Focused Tests Pass**: Ensure domain tests pass on Mac (`mise run test:mac <test-paths...>`).
 * **Changeset Created**: Run `npm run changeset` if user-facing changes were introduced. Frontmatter must contain `pr: <issue-number>`.
 * **Run Pre-PR Quality Gate**: Run `mise run ready:pr` (or `mise run pr` / `./scratch/ready-pr.sh`).
-  * Enforces: zero uncommitted changes, contribution publish boundary clean, workflow byte budgets within limits, personal workspace state synced via `push:env`, and full clean-room CI passing 100% on Mac.
+  * Enforces: zero uncommitted changes, upstream drift gate clean, contribution publish boundary clean, workflow byte budgets within limits, personal workspace state synced via `push:env`, full clean-room CI passing 100% on Mac, and final pre-push drift check.
 * **Open PR Targeting `upstream/next`**: Use formatted command from `ready:pr` with correct template (`.github/PULL_REQUEST_TEMPLATE/<type>.md`).
 * **CI Verification Guard**: Monitor `gh pr checks <PR_NUMBER> --repo open-gsd/gsd-core`. Never notify maintainers until 100% of checks are green against current `HEAD_SHA`.
 

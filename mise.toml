@@ -25,6 +25,10 @@ run = "./scratch/ci-mac.sh npm test"
 description = "Verify workflow byte budgets (ADR-857 Phase 6 ceilings) and drift acks"
 run = "./scratch/check-workflow-budgets.sh"
 
+[tasks."check:boundary"]
+description = "Verify contribution boundary clean (no personal workflow files in PR diff)"
+run = "./scratch/check-publish-boundary.sh"
+
 [tasks.check]
 description = "Pre-flight CI checks (routed to Mac runner with budget check)"
 run = "./scratch/check-workflow-budgets.sh && ./scratch/ci-mac.sh"

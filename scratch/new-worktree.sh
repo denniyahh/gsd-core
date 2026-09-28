@@ -61,8 +61,9 @@ if [ -d "$ROOT/.planning" ]; then
 fi
 
 # Configure worktree git exclude so personal files remain unstaged and uncommitted
-mkdir -p "$WORKTREE_DIR/.git/info"
-cat > "$WORKTREE_DIR/.git/info/exclude" <<'EOF'
+WORKTREE_GIT_DIR="$(git -C "$WORKTREE_DIR" rev-parse --git-dir)"
+mkdir -p "$WORKTREE_GIT_DIR/info"
+cat > "$WORKTREE_GIT_DIR/info/exclude" <<'EOF'
 .agents/
 scratch/
 mise.toml
@@ -78,7 +79,7 @@ fi
 # ineffective. Use worktree-specific hook storage and preserve the upstream
 # pre-push hook before layering personal checks on top.
 git -C "$WORKTREE_DIR" config extensions.worktreeConfig true
-WORKTREE_GIT_DIR="$(git -C "$WORKTREE_DIR" rev-parse --git-dir)"
+git -C "$WORKTREE_DIR" config --worktree core.excludesFile "$WORKTREE_GIT_DIR/info/exclude"
 HOOK_DIR="${WORKTREE_GIT_DIR}/personal-hooks"
 mkdir -p "$HOOK_DIR"
 UPSTREAM_HOOKS="$(git -C "$WORKTREE_DIR" config --get core.hooksPath 2>/dev/null || true)"

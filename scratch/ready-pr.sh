@@ -28,7 +28,25 @@ fi
 
 DRY_RUN="${1:-}"
 
-# Step 1: Working Tree Cleanliness
+# Step 1: Upstream Drift Gate (MANDATORY)
+echo "🔍 Checking for upstream drift on next branch..."
+UPSTREAM_REMOTE="upstream"
+if ! git remote get-url upstream >/dev/null 2>&1; then
+  UPSTREAM_REMOTE="origin"
+fi
+git fetch "$UPSTREAM_REMOTE" next --quiet
+BEHIND_COUNT="$(git rev-list --count HEAD.."$UPSTREAM_REMOTE"/next)"
+if [ "$BEHIND_COUNT" -gt 0 ]; then
+  echo "❌ Error: Branch is $BEHIND_COUNT commit(s) behind $UPSTREAM_REMOTE/next!" >&2
+  echo "   Subsequent commits have landed on $UPSTREAM_REMOTE/next after this PR base." >&2
+  echo "   Per PR submission protocol: you must rebase onto $UPSTREAM_REMOTE/next and restart the PR process:" >&2
+  echo "       git fetch $UPSTREAM_REMOTE next && git rebase $UPSTREAM_REMOTE/next" >&2
+  echo "       ./scratch/ready-pr.sh" >&2
+  exit 1
+fi
+echo "✅ Upstream drift check passed (branch is based on current $UPSTREAM_REMOTE/next HEAD)."
+
+# Step 2: Working Tree Cleanliness
 DIRTY_DIFF="$(git status --porcelain | grep -v '^[?][?]' || true)"
 if [ -n "$DIRTY_DIFF" ]; then
   echo "❌ Error: Uncommitted changes detected. Commit or stash them before opening a PR:" >&2
@@ -83,9 +101,21 @@ else
   echo "✅ Remote Mac CI suite passed 100% green!"
   echo ""
 
-  # Step 7: Push to Fork (Origin)
+  # Step 7: Push to Fork (Origin) with Final Drift Check
+  echo "🔍 Performing final upstream drift check before push..."
+  git fetch "$UPSTREAM_REMOTE" next --quiet
+  FINAL_BEHIND="$(git rev-list --count HEAD.."$UPSTREAM_REMOTE"/next)"
+  if [ "$FINAL_BEHIND" -gt 0 ]; then
+    echo "❌ Error: $FINAL_BEHIND new commit(s) landed on $UPSTREAM_REMOTE/next while CI was running!" >&2
+    echo "   Per PR submission protocol: you must rebase and restart the PR process:" >&2
+    echo "       git fetch $UPSTREAM_REMOTE next && git rebase $UPSTREAM_REMOTE/next" >&2
+    echo "       ./scratch/ready-pr.sh" >&2
+    exit 1
+  fi
+  echo "✅ Final drift check clean."
+
   echo "📤 Pushing branch to origin ($BRANCH)..."
-  git push -u origin HEAD
+  git push -u --force-with-lease origin HEAD
   echo "✅ Pushed to origin/HEAD."
   echo ""
 fi
@@ -107,6 +137,9 @@ elif [[ "$BRANCH" =~ ^([a-zA-Z]+)/(.*)$ ]]; then
 fi
 
 TEMPLATE_PATH=".github/PULL_REQUEST_TEMPLATE/${TYPE}.md"
+if [ ! -f "$TEMPLATE_PATH" ] && [ -f ".github/PULL_REQUEST_TEMPLATE/${TYPE}ment.md" ]; then
+  TEMPLATE_PATH=".github/PULL_REQUEST_TEMPLATE/${TYPE}ment.md"
+fi
 if [ ! -f "$TEMPLATE_PATH" ]; then
   TEMPLATE_PATH=".github/PULL_REQUEST_TEMPLATE/default.md"
 fi

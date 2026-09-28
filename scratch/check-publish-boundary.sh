@@ -22,17 +22,35 @@ if ! git rev-parse --verify --quiet "refs/remotes/${BASE_REF#refs/remotes/}" >/d
   exit 1
 fi
 
-while read -r _local_ref local_sha _remote_ref _remote_sha; do
-  [ -z "${local_sha:-}" ] && continue
-  [ "$local_sha" = "$ZERO_SHA" ] && continue
+check_sha() {
+  local target_sha="$1"
+  [ -z "$target_sha" ] && return 0
+  [ "$target_sha" = "$ZERO_SHA" ] && return 0
 
   while IFS= read -r path; do
     [ -z "$path" ] && continue
     if is_local_only_path "$path"; then
       violations+=("$path")
     fi
-  done < <(git diff --name-only --diff-filter=ACMRT "$BASE_REF...$local_sha")
-done
+  done < <(git diff --name-only --diff-filter=ACMRT "$BASE_REF...$target_sha")
+}
+
+if [ "$#" -gt 0 ]; then
+  # Mode 1: Explicit target ref(s) passed as arguments
+  for ref in "$@"; do
+    target_sha="$(git rev-parse --verify "$ref")"
+    check_sha "$target_sha"
+  done
+elif [ ! -t 0 ] && read -t 0; then
+  # Mode 2: Git pre-push hook or piped input with available data
+  while read -r _local_ref local_sha _remote_ref _remote_sha; do
+    check_sha "${local_sha:-}"
+  done
+else
+  # Mode 3: Standalone invocation (TTY or open pipe with no pending input) -> default to HEAD
+  target_sha="$(git rev-parse --verify HEAD)"
+  check_sha "$target_sha"
+fi
 
 if [ "${#violations[@]}" -gt 0 ]; then
   {
