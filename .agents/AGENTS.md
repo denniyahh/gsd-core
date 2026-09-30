@@ -42,7 +42,7 @@
 * **Run Pre-PR Quality Gate**: Run `mise run ready:pr` (or `mise run pr` / `./scratch/ready-pr.sh`).
   * Enforces: zero uncommitted changes, upstream drift gate clean, contribution publish boundary clean, workflow byte budgets within limits, personal workspace state synced via `push:env`, full clean-room CI passing 100% on Mac, and final pre-push drift check.
 * **Open PR Targeting `upstream/next`**: Use formatted command from `ready:pr` with correct template (`.github/PULL_REQUEST_TEMPLATE/<type>.md`).
-* **CI Verification Guard**: Monitor `gh pr checks <PR_NUMBER> --repo open-gsd/gsd-core`. Never notify maintainers until 100% of checks are green against current `HEAD_SHA`.
+* **CI Verification Guard & Re-Review Notification**: Monitor `gh pr checks <PR_NUMBER> --repo open-gsd/gsd-core`. Never notify maintainers until 100% of checks are green against current `HEAD_SHA`. Once ALL GitHub Actions checks are 100% green, you MUST post a concise, factual comment on the PR requesting maintainer re-review, summarizing the commit, changes made, and passing status.
 
 ## 4. Worktree-Safe Contribution Flow
 * **Sync, then isolate**: Run `mise run sync` in this primary checkout. For AI-assisted work, create the task branch in a separate worktree via `mise run start:wt <type> <issue-number> <slug>`.
@@ -85,3 +85,4 @@ not a substitute for reviewing the staged diff.
 * **CI Verification Rules**:
   * ALWAYS query status via `gh run list --workflow Tests` or `gh pr checks <PR_NUMBER>`. Never rely on un-filtered `gh run list` (which returns single-job sidecars).
   * NEVER post a comment to maintainers stating that a PR is ready for review until ALL GitHub Actions CI checks have completed successfully (100% green).
+  * ONCE ALL GitHub Actions checks are 100% green on current HEAD_SHA, you MUST post a concise, factual update comment citing the commit, changes made, and passing status to request maintainer re-review.
