@@ -13,3 +13,10 @@
 - Remote Mac runner (`mise run test:mac tests/phase.test.cjs`): 603 passed, 0 failed.
 - Remote Mac runner (`mise run test:mac tests/loop-walk.qa.test.cjs`): 143 passed, 0 failed.
 - Workflow byte ceilings & drift acks (`mise run check:budget`): passed.
+
+## Retirement & Upstream Status (2026-09-30)
+- Upstream PR: https://github.com/open-gsd/gsd-core/pull/4938 (Fixes #4686)
+- Upstream Status: Closed unmerged by maintainer `trek-e` on 2026-09-27.
+- Maintainer Rationale: Closed as superseded by architectural refactor Epic #5056 ("one owner per workflow verdict", ADR-5057 / Phase 8), which replaces this code path with typed verdicts through the `cli-exit` process exit contract rather than verb-local exit assignments. Maintainer cited this PR's diagnosis and analysis as evidence in the design and noted that Phase 8 will reference #4686 with `Refs` and carry a fail-first regression for it.
+- Action Taken: Task retired. Worktree `../gsd-core-cli` removed, local branch `fix/4686-cli` deleted, and remote branch `origin/fix/4686-cli` deleted.
+
