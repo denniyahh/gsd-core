@@ -123,7 +123,7 @@ Otherwise: Apply checkpoint-based routing below.
 
   ```bash
   ISOLATION=none
-  gsd_run query dispatch-isolation --raw --force-isolation none >/dev/null 2>&1 || true
+  gsd_run query dispatch-isolation --raw --force-isolation none --phase "${PHASE}" --plan "${PLAN}" >/dev/null 2>&1 || true
   ```
 
 - **Pattern A:** read @gsd-core/references/dispatch-isolation-gate.md and run its
@@ -140,7 +140,7 @@ Otherwise: Apply checkpoint-based routing below.
 
   ```bash
   ISOLATION=none
-  gsd_run query dispatch-isolation --raw --force-isolation none >/dev/null 2>&1 || true
+  gsd_run query dispatch-isolation --raw --force-isolation none --phase "${PHASE}" --plan "${PLAN}" >/dev/null 2>&1 || true
   ```
 
   Segment dispatches therefore carry no `{harnessFlag}`.
@@ -445,7 +445,7 @@ Update STATE.md using gsd_run query (or legacy gsd-tools) state mutations:
 ```bash
 # Check negotiated isolation mode (#4799): worktree isolation vs sequential execution
 if [ -f .git ]; then
-  _ISOLATION=$(gsd_run query read-dispatch-isolation --raw 2>/dev/null || true)
+  _ISOLATION=$(gsd_run query read-dispatch-isolation --raw --phase "${PHASE}" --plan "${PLAN}" 2>/dev/null || true)
   if [ "$_ISOLATION" = "none" ]; then
     IS_WORKTREE="false"
   else
@@ -511,7 +511,7 @@ across siblings; the orchestrator owns the post-merge sync centrally
 ```bash
 # Check negotiated isolation mode (#4799): worktree isolation vs sequential execution
 if [ -f .git ]; then
-  _ISOLATION=$(gsd_run query read-dispatch-isolation --raw 2>/dev/null || true)
+  _ISOLATION=$(gsd_run query read-dispatch-isolation --raw --phase "${PHASE}" --plan "${PLAN}" 2>/dev/null || true)
   if [ "$_ISOLATION" = "none" ]; then
     IS_WORKTREE="false"
   else
@@ -558,7 +558,7 @@ Task code already committed per-task. Commit plan metadata:
 ```bash
 # Check negotiated isolation mode (#4799): worktree isolation vs sequential execution
 if [ -f .git ]; then
-  _ISOLATION=$(gsd_run query read-dispatch-isolation --raw 2>/dev/null || true)
+  _ISOLATION=$(gsd_run query read-dispatch-isolation --raw --phase "${PHASE}" --plan "${PLAN}" 2>/dev/null || true)
   if [ "$_ISOLATION" = "none" ]; then
     IS_WORKTREE="false"
   else

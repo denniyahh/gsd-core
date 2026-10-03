@@ -436,7 +436,7 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
       );
     });
 
-    test('worktree_metadata_capture gates capturing on isolated worktree modes (#4799)', () => {
+    test('worktree_metadata_capture gates capturing on non-none isolation modes (#4799)', () => {
       const start = content.indexOf('<worktree_metadata_capture>');
       const end = content.indexOf('</worktree_metadata_capture>', start);
       assert.ok(start !== -1 && end !== -1, 'gsd-executor.md must define <worktree_metadata_capture>');
@@ -448,8 +448,8 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
       );
       assert.match(
         captureBlock,
-        /harness-worktree\|orchestrator-worktree/,
-        'worktree_metadata_capture must only capture worktree metadata for isolated modes (#4799)'
+        /if\s+\[\s+"?\$_ISOLATION"?\s+!=\s+"none"\s+\]/,
+        'worktree_metadata_capture must capture worktree metadata unless isolation is exactly "none" (#4799)'
       );
     });
   });
