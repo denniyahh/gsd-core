@@ -2793,7 +2793,6 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   function readDispatchIsolationSentinel(cwd) {
     const nodePath = require('path');
     const nodeFs = require('fs');
-    const VALID_ISOLATION = new Set(['harness-worktree', 'orchestrator-worktree', 'none']);
     const root = typeof resolveMainWorktreeCwd === 'function' ? resolveMainWorktreeCwd(cwd) : cwd;
     const sentinelPath = nodePath.join(root, '.gsd', 'dispatch-isolation-sentinel.json');
     try {
@@ -2801,7 +2800,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       const parsed = JSON.parse(raw);
       if (
         parsed && typeof parsed === 'object' &&
-        VALID_ISOLATION.has(parsed.isolation) &&
+        DISPATCH_ISOLATION_VOCABULARY.has(parsed.isolation) &&
         typeof parsed.written_at === 'number' && Number.isFinite(parsed.written_at)
       ) {
         // #4799 / review: Agent-side read applies NO staleness TTL check.
@@ -2840,10 +2839,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // registry+config check, so a missing sentinel is safe, just less precise.
     //
     // Output: { recorded: true|false, path, error? }
-    const VALID_ISOLATION = new Set(['harness-worktree', 'orchestrator-worktree', 'none']);
     const isoIdx = args.indexOf('--isolation');
     const isolation = isoIdx !== -1 ? args[isoIdx + 1] : undefined;
-    if (!isolation || !VALID_ISOLATION.has(isolation)) {
+    if (!isolation || !DISPATCH_ISOLATION_VOCABULARY.has(isolation)) {
       error(
         'Usage: record-dispatch-isolation --isolation <harness-worktree|orchestrator-worktree|none> ' +
         '[--harness-flag <flag>|--harness-flag=<flag>] [--phase <n>] [--plan <id>]',
@@ -2911,6 +2909,35 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       process.exitCode = 1;
       return;
     }
+
+    const phaseIdx = args.indexOf('--phase');
+    const expectedPhase = phaseIdx !== -1 && args[phaseIdx + 1] && !args[phaseIdx + 1].startsWith('--')
+      ? args[phaseIdx + 1]
+      : null;
+    const planIdx = args.indexOf('--plan');
+    const expectedPlan = planIdx !== -1 && args[planIdx + 1] && !args[planIdx + 1].startsWith('--')
+      ? args[planIdx + 1]
+      : null;
+
+    // #4799 Major 3: carry decision per executor. If the caller passes plan identity
+    // (--phase and/or --plan) and the sentinel specifies a plan identity that mismatches,
+    // fail closed (exit 1). A leftover or unmatching 'none' must not cause another plan to skip allow-list.
+    let planMismatch = false;
+    if (expectedPhase && result.phase && result.phase !== expectedPhase) {
+      planMismatch = true;
+    }
+    if (expectedPlan && result.plan && result.plan !== expectedPlan) {
+      planMismatch = true;
+    }
+
+    if (planMismatch) {
+      if (args.indexOf('--json') !== -1) {
+        output({ present: false, mismatched: true, isolation: null, recordedPhase: result.phase, recordedPlan: result.plan }, raw);
+      }
+      process.exitCode = 1;
+      return;
+    }
+
     if (args.indexOf('--json') !== -1) {
       output({
         present: true,

@@ -119,14 +119,12 @@ GSD_WORKTREE_PATH=""
 GSD_WORKTREE_BRANCH=""
 GSD_WORKTREE_EXPECTED_BASE=""
 if [ -f .git ]; then
-  _ISOLATION=$(gsd_run query read-dispatch-isolation --raw 2>/dev/null || true)
-  case "$_ISOLATION" in
-    harness-worktree|orchestrator-worktree)
-      GSD_WORKTREE_PATH=$(git rev-parse --show-toplevel)
-      GSD_WORKTREE_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-      GSD_WORKTREE_EXPECTED_BASE=$(git rev-parse HEAD)
-      ;;
-  esac
+  _ISOLATION=$(gsd_run query read-dispatch-isolation --raw --phase "${PHASE}" --plan "${PLAN}" 2>/dev/null || true)
+  if [ "$_ISOLATION" != "none" ]; then
+    GSD_WORKTREE_PATH=$(git rev-parse --show-toplevel)
+    GSD_WORKTREE_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    GSD_WORKTREE_EXPECTED_BASE=$(git rev-parse HEAD)
+  fi
 fi
 ```
 </worktree_metadata_capture>
@@ -513,7 +511,7 @@ if [ -f .git ]; then  # worktree
   # worktree dispatches (harness-worktree or orchestrator-worktree), NOT when running
   # sequentially (ISOLATION=none) where commits to non-protected phase branches are allowed.
   # Read recorded isolation decision; never re-resolve capability or clobber sentinel (#4799).
-  _ISOLATION=$(gsd_run query read-dispatch-isolation --raw 2>/dev/null || true)
+  _ISOLATION=$(gsd_run query read-dispatch-isolation --raw --phase "${PHASE}" --plan "${PLAN}" 2>/dev/null || true)
   # Fail closed (#4799 Major 3): if in a worktree and isolation cannot be determined
   # or is not explicitly 'none', enforce the agent branch allow-list.
   if [ "$_ISOLATION" != "none" ]; then

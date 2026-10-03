@@ -1657,32 +1657,6 @@ describe('#4799: gsd-executor.md pre-commit isolation allow-list', () => {
     assert.match(result.stderr, /not in the agent-\* \/ worktree-agent-\* \/ worktree-wf_\* namespace/);
     assert.doesNotMatch(result.stdout, /GUARD_PASSED/);
   });
-
-  // allow-test-rule: source-text-is-the-product
-  // Justification: structural verification that gsd-executor.md Step 0 reads recorded
-  // isolation via read-dispatch-isolation and gates the worktree allow-list without clobbering.
-  test('#4799 structural: step 0 reads recorded isolation and gates allow-list without clobbering', () => {
-    assert.match(
-      bash,
-      /read-dispatch-isolation/,
-      'step 0 must query read-dispatch-isolation to read the recorded sentinel (#4799)',
-    );
-    assert.doesNotMatch(
-      bash,
-      /query\s+dispatch-isolation/,
-      'step 0 must not query dispatch-isolation (which re-resolves and clobbers sentinel) (#4799)',
-    );
-    assert.match(
-      bash,
-      /if\s+\[\s+-f\s+\.git\s+\];\s*then/,
-      'step 0 must gate worktree checks on [ -f .git ] (#4799)',
-    );
-    assert.match(
-      bash,
-      /if\s+\[\s+"?\$_ISOLATION"?\s+!=\s+"none"\s+\];\s*then/,
-      'step 0 must enforce allow-list only when _ISOLATION is not "none" (#4799)',
-    );
-  });
 });
 
 // ─── #4799: execute-plan.md IS_WORKTREE derivation ───────────────────────────
@@ -1781,15 +1755,49 @@ describe('#4799: execute-plan.md IS_WORKTREE derivation', () => {
     assert.match(result.stdout, /IS_WORKTREE=true/);
   });
 
-  // allow-test-rule: source-text-is-the-product
-  // Justification: structural verification that execute-plan.md queries read-dispatch-isolation
-  // at all 3 state persistence steps and never clobbers sentinel via dispatch-isolation.
-  test('#4799 structural: execute-plan.md derives IS_WORKTREE from [ -f .git ] and read-dispatch-isolation across all 3 state sites', () => {
-    const workflowPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-plan.md');
-    const content = readFileNormalized(workflowPath);
-    const matches = content.match(/read-dispatch-isolation/g);
-    assert.ok(matches && matches.length >= 3, 'execute-plan.md must query read-dispatch-isolation at all 3 state persistence steps (#4799)');
-    assert.doesNotMatch(isWorktreeBash, /query\s+dispatch-isolation/, 'execute-plan.md IS_WORKTREE blocks must not query dispatch-isolation (sentinel clobbering) (#4799)');
+  test('#4799 behavioral: Pattern C records none and read-dispatch-isolation yields IS_WORKTREE=false for matching plan', (t) => {
+    const scriptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4799-pattern-c-'));
+    t.after(() => cleanup(scriptDir));
+
+    fs.mkdirSync(path.join(scriptDir, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(scriptDir, '.git'), 'gitdir: /nonexistent\n');
+
+    // Step 1: Execute Pattern C record command
+    const recordResult = runGsdTools([
+      'query', 'record-dispatch-isolation',
+      '--isolation', 'none',
+      '--phase', '05-05',
+      '--plan', '01',
+    ], scriptDir);
+    assert.strictEqual(recordResult.exitCode, 0, recordResult.stderr);
+
+    // Step 2: Query read-dispatch-isolation with matching plan identity -> returns "none"
+    const readMatch = runGsdTools([
+      'query', 'read-dispatch-isolation',
+      '--raw',
+      '--phase', '05-05',
+      '--plan', '01',
+    ], scriptDir);
+    assert.strictEqual(readMatch.exitCode, 0, readMatch.stderr);
+    assert.strictEqual(readMatch.output.trim(), 'none');
+
+    // Step 3: Run the extracted execute-plan IS_WORKTREE block with matching plan identity -> evaluates to false!
+    const { scriptDir: runDir, result } = runExecutePlanScript('gsd-4799-pattern-c-exec-', {
+      isWorktree: true,
+      recordedIsolation: 'none',
+    });
+    t.after(() => cleanup(runDir));
+    assert.strictEqual(result.exitCode, 0, result.stderr);
+    assert.match(result.stdout, /IS_WORKTREE=false/);
+
+    // Step 4: Negative control: query read-dispatch-isolation with mismatched plan identity -> fails closed (exit 1)!
+    const readMismatch = runGsdTools([
+      'query', 'read-dispatch-isolation',
+      '--raw',
+      '--phase', '05-05',
+      '--plan', '02',
+    ], scriptDir);
+    assert.strictEqual(readMismatch.exitCode, 1, 'Mismatched plan identity must fail closed');
   });
 });
 
