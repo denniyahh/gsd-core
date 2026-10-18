@@ -16,6 +16,12 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "🔄 Resuming Task in: $ROOT"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
+# 0. Automatically Prune Merged/Closed Worktrees
+if [ -x "$SCRATCH_DIR/prune-completed-worktrees.sh" ]; then
+  "$SCRATCH_DIR/prune-completed-worktrees.sh"
+  echo ""
+fi
+
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 echo "📌 Current branch: $BRANCH"
 

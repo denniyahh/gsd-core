@@ -44,6 +44,11 @@
 * **Open PR Targeting `upstream/next`**: Use formatted command from `ready:pr` with correct template (`.github/PULL_REQUEST_TEMPLATE/<type>.md`).
 * **CI Verification Guard & Re-Review Notification**: Monitor `gh pr checks <PR_NUMBER> --repo open-gsd/gsd-core`. Never notify maintainers until 100% of checks are green against current `HEAD_SHA`. Once ALL GitHub Actions checks are 100% green, you MUST post a concise, factual comment on the PR requesting maintainer re-review, summarizing the commit, changes made, and passing status.
 
+### D. Merged PR Lifecycle & Automated Worktree Pruning
+* **Automated Workspace Cleanup**: When a PR is merged into `upstream/next`, its dedicated worktree and branches must be pruned to prevent disk clutter and stale workspace drift.
+* **Automatic Pruning Triggers**: Merged worktrees are automatically detected and cleanly pruned during `mise run resume:task`, `mise run start:wt`, or explicitly via `mise run prune:completed` (alias `mise run prune:wt` / `./scratch/prune-completed-worktrees.sh`).
+* **Automated PR Status & Feedback Triage**: Run `mise run pr:status` (`./scratch/check-pr-feedback.sh`) to scan all open authored PRs, active review decisions (`CHANGES_REQUESTED` vs `APPROVED`), upstream divergence, and real-time GitHub Actions CI checks against current `HEAD_SHA`.
+
 ## 4. Worktree-Safe Contribution Flow
 * **Sync, then isolate**: Run `mise run sync` in this primary checkout. For AI-assisted work, create the task branch in a separate worktree via `mise run start:wt <type> <issue-number> <slug>`.
 * **Validation**: Run `mise run check` from the task worktree (which automatically syncs and verifies on the Mac runner) before requesting review or opening a PR. Use narrower suites (e.g. `mise run test:mac`) during the edit loop when appropriate.
@@ -73,11 +78,12 @@ If a private customization needs to change during development, edit it in the in
 but stage only the intended upstream files. The helper's publish guard is the final safety net,
 not a substitute for reviewing the staged diff.
 
-## 4. Reference Notes
+## 5. Reference Notes
 * See [scratch/FORK_NOTES.md](file:///home/denniyahh/Github/gsd-core/scratch/FORK_NOTES.md) for local environment notes and shortcuts.
+* See [scratch/OPEN-ISSUES-REMEDIATION-STRATEGY.md](file:///var/home/denniyahh/Github/gsd-core-personal-workspace/scratch/OPEN-ISSUES-REMEDIATION-STRATEGY.md) for the active roadmap and execution order for authored open issues (#4946, #4943, #4944, #4945, #4947).
 * Keep the shared DevFlow dogfooding ledger at [scratch/UPSTREAM-GSD-ISSUES.md](file:///home/denniyahh/Github/gsd-core/scratch/UPSTREAM-GSD-ISSUES.md). DevFlow links to this file; record only upstream GSD issues there.
 
-## 5. PR & Contribution Formatting (CRITICAL)
+## 6. PR & Contribution Formatting (CRITICAL)
 * **PR Title Format**: Must strictly follow `type(#<issue>): short summary` (e.g. `fix(#3158): branch protection checks`). Do not use brackets like `[fix]`.
 * **Changesets Required**: Every PR with user-facing changes MUST have a `.changeset/*.md` fragment created via `npm run changeset`. The fragment MUST include `pr: <NNN>` in its frontmatter.
 * **PR Templates**: You must use the correct GitHub template for the PR type (e.g. `.github/PULL_REQUEST_TEMPLATE/fix.md`). Do NOT use the default template or overwrite it with a blank body.
@@ -86,3 +92,53 @@ not a substitute for reviewing the staged diff.
   * ALWAYS query status via `gh run list --workflow Tests` or `gh pr checks <PR_NUMBER>`. Never rely on un-filtered `gh run list` (which returns single-job sidecars).
   * NEVER post a comment to maintainers stating that a PR is ready for review until ALL GitHub Actions CI checks have completed successfully (100% green).
   * ONCE ALL GitHub Actions checks are 100% green on current HEAD_SHA, you MUST post a concise, factual update comment citing the commit, changes made, and passing status to request maintainer re-review.
+
+## 7. Upstream Review Standards & Defect Prevention (Learnings from PR Reviews)
+
+These rules are drawn directly from maintainer code reviews on open PRs (#4964, #5150, #5149, #5151, #4951) to eliminate recurring review feedback and prevent blocker comments:
+
+1. **Workflow Changes & Benchmark Baseline Synchronization (MANDATORY)**:
+   * Whenever any workflow file (`gsd-core/workflows/execute-phase.md`, `gsd-core/workflows/plan-phase.md`, or any file under `gsd-core/workflows/`) is modified, or whenever rebasing a branch that touches workflows onto `upstream/next`, you **MUST** re-synchronize the compact-content benchmark baseline:
+     ```bash
+     node scripts/benchmark-compact-content.cjs --write
+     ```
+   * Commit the updated `tests/fixtures/compact-content-benchmark-baseline.json` alongside your changes. Never push a workflow diff without updating this baseline.
+
+2. **Changeset Descriptions: Symptom-Led Lead Sentence (CRITICAL)**:
+   * Changeset descriptions must always lead with a **bold, symptom-led summary sentence** describing the user-observable defect or behavior change, followed by an em-dash (`—`) and the technical mechanism.
+     * **Required**: `**<Feature/Command> no longer <user-visible symptom>** — <technical explanation> (#<issue>).`
+     * *Example*: `**`/gsd-pause-work` no longer produces a commit Conventional Commits hooks reject** — Changed the hardcoded pause/handoff commit subject from `wip:` to `docs(pause):` in `gsd-core/workflows/pause-work.md`... (#4943).`
+     * *Incorrect*: `Fixed conventional commit format in pause-work workflow.`
+   * If the change is prompt-only, test-only, or reference alignment without public documentation impact, always include the docs-exemption comment directly above the lead sentence:
+     ```markdown
+     <!-- docs-exempt: <concise rationale, e.g. prompt and reference table alignment; no public CLI or docs change> -->
+     ```
+
+3. **Behavioral Testing over Brittle Prose/Markdown Grepping**:
+   * Maintainers reject brittle text/regex assertions over prompt markdown files (`agents/*.md`, `gsd-core/workflows/*.md`).
+   * Tests **MUST** be behavioral whenever feasible:
+     * Construct a minimal disk fixture or simulated environment.
+     * Invoke the actual CLI tool, command query, or helper (e.g. `gsd-tools requirements ready-ids`, `read-dispatch-isolation`).
+     * Assert on the resulting state change, exit code, or JSON output.
+     * **Always include negative controls**: Test what happens when input is missing, empty, or mismatched (e.g., verifying that missing context fails closed, or that uncompleted tasks remain unchecked in `REQUIREMENTS.md`).
+
+4. **Single-Line Placement for Test Directive Annotations**:
+   * When marking intentional assertions on prompt text or source strings with the test scanner directive `allow-test-rule: source-text-is-the-product`, place the directive on the **exact same line** as the assertion or pattern match, never across separate or multi-line comment blocks.
+
+5. **Agent Prompt Schemas: Comment-Only Contracts (No Literal Dummy Examples)**:
+   * In agent prompt templates and schema instructions (`agents/*.md`, `gsd-core/references/*.md`), **NEVER** include literal fake file paths, dummy routes, or dummy entity names (e.g. `src/services/auth.ts`, `src/routes/login.ts`). LLMs can hallucinate or echo these dummy paths into production plans.
+   * Use empty collections accompanied by comment-only schema contracts:
+     ```yaml
+     # key_links: Array of cross-plan dependency links (from, to, via, pattern).
+     # from/to must be project-relative file paths ONLY.
+     # via describes the connection mechanism. pattern: optional pattern name.
+     key_links: []
+     ```
+
+6. **Defensive Parameter Context & Scoped Fail-Closed Sentinels**:
+   * Shell snippets in agent prompts must defensively bind variables from prompt context with fallbacks (e.g. `PLAN_PATH="${PLAN_PATH:-<assigned plan file path from prompt context>}"`) rather than assuming ambient environment variables exist.
+   * Queries reading state sentinels (such as `read-dispatch-isolation`) must scope down to match target phase/plan parameters and fail closed (`throw` or return safe default) on mismatch.
+
+7. **Vocabulary & Constant Single Source of Truth**:
+   * Never duplicate validation arrays, allowed flag values, or string vocabularies across different files (e.g., duplicating `VALID_ISOLATION` instead of reusing `DISPATCH_ISOLATION_VOCABULARY`). Always import and reuse the single authoritative definition.
+

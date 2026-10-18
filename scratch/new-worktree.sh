@@ -42,6 +42,11 @@ copy_required_directory() {
 echo "🔄 Fetching latest upstream/next..."
 git fetch upstream next
 
+# Automatically prune completed worktrees first
+if [ -x "$ROOT/scratch/prune-completed-worktrees.sh" ]; then
+  "$ROOT/scratch/prune-completed-worktrees.sh"
+fi
+
 if [ -d "$WORKTREE_DIR" ]; then
   echo "❌ Error: Target worktree directory already exists: $WORKTREE_DIR" >&2
   exit 1

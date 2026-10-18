@@ -34,8 +34,8 @@ description = "Pre-flight CI checks (routed to Mac runner with budget check)"
 run = "./scratch/check-workflow-budgets.sh && ./scratch/ci-mac.sh"
 
 [tasks.sync]
-description = "Sync with upstream/next"
-run = "git fetch upstream next && git merge upstream/next"
+description = "Sync with upstream/next and prune completed PR worktrees"
+run = "git fetch upstream next && git merge upstream/next && ./scratch/prune-completed-worktrees.sh"
 
 [tasks."start:wt"]
 description = "Create a new isolated task worktree with Mac CI runner capabilities inherited"
@@ -64,4 +64,25 @@ run = "./scratch/sync-personal-env.sh push"
 [tasks.pr]
 description = "Pre-PR verification and submission workflow"
 run = "./scratch/ready-pr.sh"
+
+[tasks."pr:feedback"]
+description = "Check GitHub notifications stream for maintainer feedback and stage remediation context"
+run = "node scratch/pr-feedback-consumer.cjs --once"
+
+[tasks."pr:watch"]
+description = "Watch GitHub notifications stream continuously for maintainer feedback"
+run = "node scratch/pr-feedback-consumer.cjs --watch"
+
+[tasks."pr:status"]
+description = "Scan all open PRs for maintainer reviews, upstream drift, and CI check statuses"
+run = "./scratch/check-pr-feedback.sh"
+
+[tasks."prune:completed"]
+description = "Discover and automatically prune worktrees and branches for merged or closed PRs"
+run = "./scratch/prune-completed-worktrees.sh"
+
+[tasks."prune:wt"]
+description = "Alias for prune:completed — prune completed PR worktrees"
+run = "./scratch/prune-completed-worktrees.sh"
+
 

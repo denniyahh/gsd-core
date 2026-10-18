@@ -62,9 +62,24 @@ if [ -f scripts/lint-emitted-drift-ack.cjs ]; then
   node scripts/lint-emitted-drift-ack.cjs || ERRORS=$((ERRORS + 1))
 fi
 
+WORKFLOW_DIFF="$(git diff --name-only upstream/next...HEAD -- gsd-core/workflows/ 2>/dev/null || true)"
+if [ -n "$WORKFLOW_DIFF" ] && [ -f scripts/benchmark-compact-content.cjs ]; then
+  echo "🔍 Checking compact-content benchmark baseline synchronization..."
+  DRIFT_OUTPUT="$(node scripts/benchmark-compact-content.cjs --check 2>/dev/null || true)"
+  if echo "$DRIFT_OUTPUT" | grep -q "DRIFT:"; then
+    echo "❌ compact-content benchmark baseline is out of sync with modified workflow files:" >&2
+    echo "$DRIFT_OUTPUT" | grep "DRIFT:" | sed 's/^/   /' >&2
+    echo "   Run: node scripts/benchmark-compact-content.cjs --write" >&2
+    ERRORS=$((ERRORS + 1))
+  else
+    echo "✅ compact-content benchmark baseline is synchronized."
+  fi
+fi
+
 if [ "$ERRORS" -gt 0 ]; then
   echo "❌ Pre-flight checks failed ($ERRORS error(s))." >&2
   exit 1
 fi
 
-echo "✅ All workflow budget and drift ack checks passed!"
+echo "✅ All workflow budget, drift ack, and benchmark checks passed!"
+
