@@ -85,4 +85,16 @@ run = "./scratch/prune-completed-worktrees.sh"
 description = "Alias for prune:completed — prune completed PR worktrees"
 run = "./scratch/prune-completed-worktrees.sh"
 
+[tasks."pr:monitor:status"]
+description = "Check systemd PR feedback and CI status background monitor timer and service"
+run = "systemctl --user status gsd-pr-monitor.timer gsd-pr-monitor.service || true"
+
+[tasks."pr:monitor:logs"]
+description = "View real-time journal logs from automated PR feedback and CI status monitor"
+run = "journalctl --user -u gsd-pr-monitor.service -n 50 --no-pager"
+
+[tasks."pr:monitor:restart"]
+description = "Restart the systemd PR feedback and CI status background monitor"
+run = "systemctl --user daemon-reload && systemctl --user restart gsd-pr-monitor.timer gsd-pr-monitor.service"
+
 
