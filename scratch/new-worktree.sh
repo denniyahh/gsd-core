@@ -130,7 +130,14 @@ if [ -x "\$WORKTREE_DIR/scratch/sync-personal-env.sh" ]; then
   bash "\$WORKTREE_DIR/scratch/sync-personal-env.sh" auto || true
 fi
 EOF
-chmod +x "$HOOK_DIR/pre-commit" "$HOOK_DIR/pre-push"
+cat > "$HOOK_DIR/post-merge" <<'EOF'
+#!/usr/bin/env bash
+# Automatically prune worktrees and branches for completed PRs after git merge / git pull
+if [ -x "./scratch/prune-completed-worktrees.sh" ]; then
+  ./scratch/prune-completed-worktrees.sh
+fi
+EOF
+chmod +x "$HOOK_DIR/pre-commit" "$HOOK_DIR/pre-push" "$HOOK_DIR/post-merge"
 
 echo "✅ Worktree initialized with Mac CI runner & personal workflow!"
 echo "👉 Next steps:"

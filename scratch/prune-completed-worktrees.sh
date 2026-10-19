@@ -54,8 +54,10 @@ while IFS= read -r line; do
         PR_TITLE="$(echo "$PR_INFO" | cut -f3)"
         PR_URL="$(echo "$PR_INFO" | cut -f4)"
 
-        if [ "$PR_STATE" = "MERGED" ]; then
-          echo "🟣 PR #$PR_NUM is MERGED ($PR_TITLE)"
+        if [ "$PR_STATE" = "MERGED" ] || [ "$PR_STATE" = "CLOSED" ]; then
+          STATE_ICON="🟣"
+          [ "$PR_STATE" = "CLOSED" ] && STATE_ICON="⚪"
+          echo "$STATE_ICON PR #$PR_NUM is $PR_STATE ($PR_TITLE)"
           # Check if worktree is clean
           DIRTY="$(git -C "$WORKTREE_PATH" status --porcelain 2>/dev/null | grep -v '^[?][?]' || true)"
           if [ -z "$DIRTY" ]; then
@@ -65,18 +67,11 @@ while IFS= read -r line; do
             git branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
             # Best effort delete on origin
             git push origin --delete "$WORKTREE_BRANCH" 2>/dev/null || true
-            echo "   ✅ Pruned merged PR #$PR_NUM worktree ($WORKTREE_PATH)"
+            echo "   ✅ Pruned $PR_STATE PR #$PR_NUM worktree ($WORKTREE_PATH)"
             PRUNED_COUNT=$((PRUNED_COUNT + 1))
           else
             echo "   ⚠️  Worktree has uncommitted tracked changes; skipping removal:"
             git -C "$WORKTREE_PATH" status --short
-          fi
-        elif [ "$PR_STATE" = "CLOSED" ]; then
-          echo "⚪ PR #$PR_NUM is CLOSED without merge ($PR_TITLE)"
-          DIRTY="$(git -C "$WORKTREE_PATH" status --porcelain 2>/dev/null | grep -v '^[?][?]' || true)"
-          if [ -z "$DIRTY" ]; then
-            echo "   Worktree is clean ($WORKTREE_PATH). Delete manually if no longer needed:"
-            echo "     git worktree remove \"$WORKTREE_PATH\" && git branch -D \"$WORKTREE_BRANCH\""
           fi
         else
           echo "🟢 PR #$PR_NUM is OPEN ($PR_TITLE) -> keeping active worktree: $WORKTREE_PATH"
@@ -89,10 +84,37 @@ while IFS= read -r line; do
   fi
 done < <(git worktree list --porcelain; echo "")
 
+# Clean up any orphaned local branches for merged/closed PRs without active worktrees
+ORPHANED_BRANCHES=0
+ACTIVE_BRANCHES="$(git worktree list --porcelain | grep '^branch refs/heads/' | sed 's|^branch refs/heads/||')"
+
+while read -r branch; do
+  [ -z "$branch" ] && continue
+  case "$branch" in
+    main|next|personal/*) continue ;;
+    *)
+      PR_INFO="$(echo "$PRS_JSON" | jq -r --arg b "$branch" '.[] | select(.headRefName == $b) | "\(.number)\t\(.state)\t\(.title)"' | head -n 1)"
+      if [ -n "$PR_INFO" ]; then
+        B_NUM="$(echo "$PR_INFO" | cut -f1)"
+        B_STATE="$(echo "$PR_INFO" | cut -f2)"
+        B_TITLE="$(echo "$PR_INFO" | cut -f3)"
+        if [ "$B_STATE" = "MERGED" ] || [ "$B_STATE" = "CLOSED" ]; then
+          if ! echo "$ACTIVE_BRANCHES" | grep -qx "$branch"; then
+            echo "🧹 Deleting orphaned local branch for $B_STATE PR #$B_NUM ($branch): $B_TITLE"
+            git branch -D "$branch" 2>/dev/null || true
+            ORPHANED_BRANCHES=$((ORPHANED_BRANCHES + 1))
+          fi
+        fi
+      fi
+      ;;
+  esac
+done < <(git for-each-ref --format='%(refname:short)' refs/heads/)
+
 echo ""
-if [ "$PRUNED_COUNT" -gt 0 ]; then
-  echo "🎉 Pruned $PRUNED_COUNT merged worktree(s)."
+TOTAL_CLEANED=$((PRUNED_COUNT + ORPHANED_BRANCHES))
+if [ "$TOTAL_CLEANED" -gt 0 ]; then
+  echo "🎉 Pruned $PRUNED_COUNT worktree(s) and $ORPHANED_BRANCHES orphaned branch(es)."
 else
-  echo "✅ No merged worktrees required pruning."
+  echo "✅ No merged or closed PR worktrees or orphaned branches required pruning."
 fi
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

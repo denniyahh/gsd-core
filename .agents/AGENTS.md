@@ -44,10 +44,13 @@
 * **Open PR Targeting `upstream/next`**: Use formatted command from `ready:pr` with correct template (`.github/PULL_REQUEST_TEMPLATE/<type>.md`).
 * **CI Verification Guard & Re-Review Notification**: Monitor `gh pr checks <PR_NUMBER> --repo open-gsd/gsd-core`. Never notify maintainers until 100% of checks are green against current `HEAD_SHA`. Once ALL GitHub Actions checks are 100% green, you MUST post a concise, factual comment on the PR requesting maintainer re-review, summarizing the commit, changes made, and passing status.
 
-### D. Merged PR Lifecycle & Automated Worktree Pruning
-* **Automated Workspace Cleanup**: When a PR is merged into `upstream/next`, its dedicated worktree and branches must be pruned to prevent disk clutter and stale workspace drift.
-* **Automatic Pruning Triggers**: Merged worktrees are automatically detected and cleanly pruned during `mise run resume:task`, `mise run start:wt`, or explicitly via `mise run prune:completed` (alias `mise run prune:wt` / `./scratch/prune-completed-worktrees.sh`).
-* **Automated PR Status & Feedback Triage**: Run `mise run pr:status` (`./scratch/check-pr-feedback.sh`) to scan all open authored PRs, active review decisions (`CHANGES_REQUESTED` vs `APPROVED`), upstream divergence, and real-time GitHub Actions CI checks against current `HEAD_SHA`.
+### D. Completed (Merged & Closed) PR Lifecycle & Automated Worktree Pruning
+* **Automated Workspace Cleanup**: When an authored PR is merged into `upstream/next` or closed upstream (e.g. superseded or completed by another PR), its dedicated worktree, local branch, and remote origin branch must be pruned to prevent disk clutter and stale workspace drift.
+* **Automatic Pruning Triggers**: Completed PR worktrees and orphaned branches are automatically detected and cleanly pruned:
+  * Automatically on `post-merge` hook runs (e.g. after `git pull` or `git merge`).
+  * Automatically during `mise run sync`, `mise run resume:task`, and `mise run start:wt`.
+  * Explicitly on demand via `mise run prune:completed` (alias `mise run prune:wt` / `./scratch/prune-completed-worktrees.sh`).
+* **Automated PR Status & Feedback Triage**: Run `mise run pr:status` (`./scratch/check-pr-feedback.sh`) to scan all open authored PRs, maintainer review decisions (`CHANGES_REQUESTED` vs `APPROVED`), upstream divergence, and real-time GitHub Actions CI checks against current `HEAD_SHA`.
 
 ## 4. Worktree-Safe Contribution Flow
 * **Sync, then isolate**: Run `mise run sync` in this primary checkout. For AI-assisted work, create the task branch in a separate worktree via `mise run start:wt <type> <issue-number> <slug>`.
@@ -95,7 +98,7 @@ not a substitute for reviewing the staged diff.
 
 ## 7. Upstream Review Standards & Defect Prevention (Learnings from PR Reviews)
 
-These rules are drawn directly from maintainer code reviews on open PRs (#4964, #5150, #5149, #5151, #4951) to eliminate recurring review feedback and prevent blocker comments:
+These rules are drawn directly from maintainer code reviews on open PRs (#4964, #5150, #5149, #5151, #4951, #5426) to eliminate recurring review feedback and prevent blocker comments:
 
 1. **Workflow Changes & Benchmark Baseline Synchronization (MANDATORY)**:
    * Whenever any workflow file (`gsd-core/workflows/execute-phase.md`, `gsd-core/workflows/plan-phase.md`, or any file under `gsd-core/workflows/`) is modified, or whenever rebasing a branch that touches workflows onto `upstream/next`, you **MUST** re-synchronize the compact-content benchmark baseline:
@@ -141,4 +144,13 @@ These rules are drawn directly from maintainer code reviews on open PRs (#4964, 
 
 7. **Vocabulary & Constant Single Source of Truth**:
    * Never duplicate validation arrays, allowed flag values, or string vocabularies across different files (e.g., duplicating `VALID_ISOLATION` instead of reusing `DISPATCH_ISOLATION_VOCABULARY`). Always import and reuse the single authoritative definition.
+
+8. **Test Harness Parity Across Duplicate Dispatch/Execution Blocks**:
+   * If a command snippet, dispatch block, or safety guard appears in multiple surfaces (e.g. `gsd-core/workflows/execute-phase.md` and documentation/backend dispatch guides like `capabilities/claude-orchestration/docs/workflow-backend-dispatch.md`), author an automated parity test extracting and comparing the blocks. Never leave parallel implementations to drift.
+
+9. **Shipped Snippet Extraction & Negative Controls (No Hardcoded Test Fakes)**:
+   * When testing workflow scripts or prompt blocks (e.g. bash dispatch guards, cleanup-tail snippets), extract the command directly from the shipped markdown file rather than hardcoding a standalone snippet in the test. Always pair the test with a negative control asserting non-zero failure before the condition is resolved and exit 0 after.
+
+10. **File & Directory Boundary Containment**:
+    * Any command accepting paths from CLI arguments or environment variables (e.g. `--phase-dir`) must resolve against repo root and validate containment within `.planning` (`isContainedIn(phaseDir, planningTreeRoot)`) to prevent path traversal or out-of-tree leaks.
 
