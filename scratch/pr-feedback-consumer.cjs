@@ -12,7 +12,7 @@
  *   node scratch/pr-feedback-consumer.cjs [--once] [--watch] [--interval <seconds>]
  */
 
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -83,6 +83,73 @@ function sendDesktopNotification(title, message) {
   } catch {
     // notify-send optional
   }
+}
+
+function findWorktreeForBranch(branchName) {
+  try {
+    const res = spawnSync('git', ['worktree', 'list', '--porcelain'], { encoding: 'utf-8' });
+    if (res.status !== 0 || !res.stdout) return null;
+    const blocks = res.stdout.split('\n\n');
+    for (const block of blocks) {
+      const lines = block.split('\n');
+      let wtPath = null;
+      let wtBranch = null;
+      for (const line of lines) {
+        if (line.startsWith('worktree ')) {
+          wtPath = line.slice('worktree '.length).trim();
+        } else if (line.startsWith('branch ')) {
+          wtBranch = line.slice('branch '.length).trim();
+        }
+      }
+      if (wtPath && wtBranch && (wtBranch === `refs/heads/${branchName}` || wtBranch.endsWith(`/${branchName}`))) {
+        return wtPath;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function dispatchAgentAction(worktreeDir, prompt, lockFile) {
+  const agyBin = fs.existsSync('/home/denniyahh/.local/bin/agy')
+    ? '/home/denniyahh/.local/bin/agy'
+    : 'agy';
+
+  const logsDir = path.join(__dirname, 'logs');
+  if (!fs.existsSync(logsDir)) {
+    fs.mkdirSync(logsDir, { recursive: true });
+  }
+  const timestamp = Date.now();
+  const logFile = path.join(logsDir, `agent-${path.basename(worktreeDir)}-${timestamp}.log`);
+  console.log(`🤖 Dispatching autonomous agent in ${worktreeDir}...`);
+  console.log(`📝 Agent log: ${logFile}`);
+
+  const wrapperScriptPath = path.join(logsDir, `dispatch-${timestamp}.sh`);
+  const safePrompt = prompt.replace(/"/g, '\\"').replace(/\$/g, '\\$');
+  const cleanupScript = `#!/usr/bin/env bash
+"${agyBin}" -p "${safePrompt}" --mode auto --dangerously-skip-permissions
+EXIT_CODE=$?
+rm -f "${lockFile}"
+rm -f "${wrapperScriptPath}"
+exit $EXIT_CODE
+`;
+  fs.writeFileSync(wrapperScriptPath, cleanupScript, { mode: 0o755 });
+
+  const out = fs.openSync(logFile, 'a');
+  const err = fs.openSync(logFile, 'a');
+
+  const child = spawn('bash', [wrapperScriptPath], {
+    cwd: worktreeDir,
+    detached: true,
+    stdio: ['ignore', out, err],
+    env: {
+      ...process.env,
+      PATH: `/home/denniyahh/.local/bin:/home/linuxbrew/.linuxbrew/bin:${process.env.PATH}`
+    }
+  });
+  child.unref();
+  console.log(`🚀 Agent process spawned (PID ${child.pid}).`);
 }
 
 function fetchOpenPrs() {
@@ -260,8 +327,10 @@ function checkPrFeedbackAndStatus(pr, myUsername, watermark) {
   };
 }
 
-function processFeedbackItem(item) {
+function processFeedbackItem(item, watermark, autoAct = false) {
   const { pr, newReviews, newComments, ciEvent, ciInfo, drift } = item;
+  const prNumber = pr.number;
+  const prWatermark = watermark[prNumber] || {};
 
   if (newReviews.length > 0 || newComments.length > 0) {
     console.log(`\n🔔 New maintainer feedback detected on PR #${pr.number}: ${pr.title}`);
@@ -305,11 +374,34 @@ function processFeedbackItem(item) {
     const feedbackFile = path.join(FEEDBACK_DIR, `PR-${pr.number}-feedback.md`);
     fs.writeFileSync(feedbackFile, report, 'utf-8');
     console.log(`📄 Feedback saved to: ${feedbackFile}`);
+
+    // Auto-act on review feedback if requested
+    if (autoAct) {
+      const wtPath = findWorktreeForBranch(pr.headRefName);
+      if (wtPath && fs.existsSync(wtPath)) {
+        const lockFile = path.join(FEEDBACK_DIR, `PR-${pr.number}.lock`);
+        if (!fs.existsSync(lockFile)) {
+          fs.writeFileSync(lockFile, JSON.stringify({ startedAt: new Date().toISOString(), pr: pr.number, type: 'review' }));
+          dispatchAgentAction(
+            wtPath,
+            `Maintainer review feedback was received on PR #${pr.number} (${pr.title}). ` +
+            `Read ${feedbackFile}, inspect reviewer comments and diffs, apply required fixes in this worktree, ` +
+            `run focused tests, ensure zero upstream drift (git fetch upstream next && git rev-list --count HEAD..upstream/next), ` +
+            `and force-push updated branch to origin.`,
+            lockFile
+          );
+        } else {
+          console.log(`🔒 Active agent lock already present for PR #${pr.number} (${lockFile}) — skipping duplicate dispatch.`);
+        }
+      } else {
+        console.log(`⚠️  Could not locate active worktree for branch ${pr.headRefName}.`);
+      }
+    }
   }
 
   // Handle CI completion event
   if (ciEvent) {
-    const { status, shortHead, pass, fail, failedJobs, drift: driftCount } = ciEvent;
+    const { status, shortHead, headOid, pass, fail, failedJobs, drift: driftCount } = ciEvent;
     if (status === 'success') {
       if (driftCount === 0) {
         console.log(`\n🚀 PR #${pr.number} CI 100% GREEN on ${shortHead} with 0 drift — READY FOR RE-REVIEW!`);
@@ -317,12 +409,40 @@ function processFeedbackItem(item) {
           `🚀 PR #${pr.number} Ready for Re-Review!`,
           `All ${pass} CI checks passed on ${shortHead} with 0 drift.`
         );
+
+        if (autoAct && prWatermark.lastCommentedHead !== headOid) {
+          console.log(`💬 Auto-posting maintainer re-review request comment on PR #${pr.number}...`);
+          const commentBody = `@trek-e All GitHub Actions CI checks have completed successfully (100% green, ${pass}/${pass} checks passing) against commit \`${shortHead}\` with 0 upstream drift on \`upstream/next\`. This PR is ready for maintainer re-review.`;
+          const commentRes = runGh(['pr', 'comment', String(pr.number), '--repo', REPO, '--body', commentBody]);
+          if (commentRes !== null) {
+            prWatermark.lastCommentedHead = headOid;
+            saveWatermark(watermark);
+            console.log(`✅ Maintainer re-review request posted on PR #${pr.number}.`);
+          }
+        }
       } else {
         console.log(`\n⚠️  PR #${pr.number} CI passed on ${shortHead}, but branch is ${driftCount} commits behind upstream/next.`);
         sendDesktopNotification(
           `⚠️ PR #${pr.number} CI Passed (Drift Detected)`,
           `Checks passed on ${shortHead}, but branch is ${driftCount} behind upstream/next.`
         );
+
+        if (autoAct) {
+          const wtPath = findWorktreeForBranch(pr.headRefName);
+          if (wtPath && fs.existsSync(wtPath)) {
+            const lockFile = path.join(FEEDBACK_DIR, `PR-${pr.number}-rebase.lock`);
+            if (!fs.existsSync(lockFile)) {
+              fs.writeFileSync(lockFile, JSON.stringify({ startedAt: new Date().toISOString(), pr: pr.number, type: 'rebase' }));
+              dispatchAgentAction(
+                wtPath,
+                `PR #${pr.number} passed CI on commit ${shortHead}, but is now ${driftCount} commits behind upstream/next. ` +
+                `Rebase the branch onto upstream/next (git fetch upstream next && git rebase upstream/next), ` +
+                `verify workflow budgets, and force-push to origin to re-trigger clean CI.`,
+                lockFile
+              );
+            }
+          }
+        }
       }
     } else if (status === 'failure') {
       console.log(`\n❌ PR #${pr.number} CI FAILED on ${shortHead} (${fail} failing): ${failedJobs.join(', ')}`);
@@ -330,12 +450,32 @@ function processFeedbackItem(item) {
         `❌ PR #${pr.number} CI Failed`,
         `Failed on ${shortHead}: ${failedJobs.slice(0, 3).join(', ')}`
       );
+
+      if (autoAct) {
+        const wtPath = findWorktreeForBranch(pr.headRefName);
+        if (wtPath && fs.existsSync(wtPath)) {
+          const lockFile = path.join(FEEDBACK_DIR, `PR-${pr.number}-ci.lock`);
+          if (!fs.existsSync(lockFile)) {
+            fs.writeFileSync(lockFile, JSON.stringify({ startedAt: new Date().toISOString(), pr: pr.number, type: 'ci-failure', headOid }));
+            dispatchAgentAction(
+              wtPath,
+              `CI failed on PR #${pr.number} for commit ${shortHead}. Failed jobs: ${failedJobs.join(', ')}. ` +
+              `Inspect the failures using gh api for failed job logs, diagnose the issue, apply fixes in this worktree, ` +
+              `run focused tests, verify workflow budgets, commit and push to origin.`,
+              lockFile
+            );
+          }
+        }
+      }
     }
   }
 }
 
-function checkAllOnce() {
+function checkAllOnce(autoAct = false) {
   console.log('🔍 Checking GitHub notification stream for maintainer feedback & CI status on open PRs...');
+  if (autoAct) {
+    console.log('⚡ Auto-action enabled: will auto-comment when 100% green and dispatch agent on failures/reviews.');
+  }
   const myUsername = getMyUsername();
   if (!myUsername) {
     console.error('❌ Failed to authenticate with gh CLI.');
@@ -355,7 +495,7 @@ function checkAllOnce() {
     const item = checkPrFeedbackAndStatus(pr, myUsername, watermark);
     if (item) {
       foundAny = true;
-      processFeedbackItem(item);
+      processFeedbackItem(item, watermark, autoAct);
     }
   }
 
@@ -369,15 +509,16 @@ function checkAllOnce() {
 function main() {
   const args = process.argv.slice(2);
   const isWatch = args.includes('--watch');
+  const autoAct = args.includes('--auto-act') || process.env.GSD_PR_AUTO_ACT === '1';
   const intervalIdx = args.indexOf('--interval');
   const intervalSeconds = intervalIdx !== -1 && args[intervalIdx + 1] ? parseInt(args[intervalIdx + 1], 10) : 60;
 
   if (isWatch) {
     console.log(`👀 Watching GitHub notifications for ${REPO} every ${intervalSeconds}s (Ctrl+C to stop)...`);
-    checkAllOnce();
-    setInterval(checkAllOnce, intervalSeconds * 1000);
+    checkAllOnce(autoAct);
+    setInterval(() => checkAllOnce(autoAct), intervalSeconds * 1000);
   } else {
-    checkAllOnce();
+    checkAllOnce(autoAct);
   }
 }
 
