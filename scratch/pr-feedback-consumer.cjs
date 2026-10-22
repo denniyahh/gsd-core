@@ -111,6 +111,12 @@ function findWorktreeForBranch(branchName) {
   return null;
 }
 
+function hasActiveAgentLock(prNumber) {
+  if (!fs.existsSync(FEEDBACK_DIR)) return false;
+  const files = fs.readdirSync(FEEDBACK_DIR);
+  return files.some(f => f.startsWith(`PR-${prNumber}`) && f.endsWith('.lock'));
+}
+
 function dispatchAgentAction(worktreeDir, prompt, lockFile) {
   const agyBin = fs.existsSync('/home/denniyahh/.local/bin/agy')
     ? '/home/denniyahh/.local/bin/agy'
@@ -381,8 +387,8 @@ function processFeedbackItem(item, watermark, autoAct = false) {
     if (autoAct) {
       const wtPath = findWorktreeForBranch(pr.headRefName);
       if (wtPath && fs.existsSync(wtPath)) {
-        const lockFile = path.join(FEEDBACK_DIR, `PR-${pr.number}.lock`);
-        if (!fs.existsSync(lockFile)) {
+        if (!hasActiveAgentLock(pr.number)) {
+          const lockFile = path.join(FEEDBACK_DIR, `PR-${pr.number}.lock`);
           fs.writeFileSync(lockFile, JSON.stringify({ startedAt: new Date().toISOString(), pr: pr.number, type: 'review' }));
           dispatchAgentAction(
             wtPath,
@@ -393,7 +399,7 @@ function processFeedbackItem(item, watermark, autoAct = false) {
             lockFile
           );
         } else {
-          console.log(`🔒 Active agent lock already present for PR #${pr.number} (${lockFile}) — skipping duplicate dispatch.`);
+          console.log(`🔒 Active agent lock already present for PR #${pr.number} — skipping duplicate dispatch.`);
         }
       } else {
         console.log(`⚠️  Could not locate active worktree for branch ${pr.headRefName}.`);
@@ -432,8 +438,8 @@ function processFeedbackItem(item, watermark, autoAct = false) {
         if (autoAct) {
           const wtPath = findWorktreeForBranch(pr.headRefName);
           if (wtPath && fs.existsSync(wtPath)) {
-            const lockFile = path.join(FEEDBACK_DIR, `PR-${pr.number}-rebase.lock`);
-            if (!fs.existsSync(lockFile)) {
+            if (!hasActiveAgentLock(pr.number)) {
+              const lockFile = path.join(FEEDBACK_DIR, `PR-${pr.number}.lock`);
               fs.writeFileSync(lockFile, JSON.stringify({ startedAt: new Date().toISOString(), pr: pr.number, type: 'rebase' }));
               dispatchAgentAction(
                 wtPath,
@@ -442,6 +448,8 @@ function processFeedbackItem(item, watermark, autoAct = false) {
                 `verify workflow budgets, and force-push to origin to re-trigger clean CI.`,
                 lockFile
               );
+            } else {
+              console.log(`🔒 Active agent lock already present for PR #${pr.number} — skipping duplicate dispatch.`);
             }
           }
         }
@@ -456,8 +464,8 @@ function processFeedbackItem(item, watermark, autoAct = false) {
       if (autoAct) {
         const wtPath = findWorktreeForBranch(pr.headRefName);
         if (wtPath && fs.existsSync(wtPath)) {
-          const lockFile = path.join(FEEDBACK_DIR, `PR-${pr.number}-ci.lock`);
-          if (!fs.existsSync(lockFile)) {
+          if (!hasActiveAgentLock(pr.number)) {
+            const lockFile = path.join(FEEDBACK_DIR, `PR-${pr.number}.lock`);
             fs.writeFileSync(lockFile, JSON.stringify({ startedAt: new Date().toISOString(), pr: pr.number, type: 'ci-failure', headOid }));
             dispatchAgentAction(
               wtPath,
@@ -466,6 +474,8 @@ function processFeedbackItem(item, watermark, autoAct = false) {
               `run focused tests, verify workflow budgets, commit and push to origin.`,
               lockFile
             );
+          } else {
+            console.log(`🔒 Active agent lock already present for PR #${pr.number} — skipping duplicate dispatch.`);
           }
         }
       }
