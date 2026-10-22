@@ -62,14 +62,15 @@ echo "$PRS_JSON" | jq -c '.[]' | while read -r pr; do
     echo "   ℹ️  Drift:   Branch origin/$PR_BRANCH not tracked locally"
   fi
 
-  # CI Checks via JSON
+  # CI Checks via JSON (filter out advisory-only checks that fail prior to maintainer review)
   CHECKS_JSON="$(gh pr checks "$PR_NUM" --repo "$REPO" --json bucket,name,workflow 2>/dev/null || echo "[]")"
-  TOTAL_CHECKS="$(echo "$CHECKS_JSON" | jq '. | length')"
-  PASS_COUNT="$(echo "$CHECKS_JSON" | jq '[.[] | select(.bucket == "pass")] | length')"
-  PENDING_COUNT="$(echo "$CHECKS_JSON" | jq '[.[] | select(.bucket == "pending")] | length')"
-  FAIL_COUNT="$(echo "$CHECKS_JSON" | jq '[.[] | select(.bucket == "fail")] | length')"
-  SKIP_COUNT="$(echo "$CHECKS_JSON" | jq '[.[] | select(.bucket == "skipping")] | length')"
-  CANCEL_COUNT="$(echo "$CHECKS_JSON" | jq '[.[] | select(.bucket == "cancel")] | length')"
+  FILTERED_CHECKS_JSON="$(echo "$CHECKS_JSON" | jq '[.[] | select(.name | test("Reviewed or maintainer"; "i") | not)]')"
+  TOTAL_CHECKS="$(echo "$FILTERED_CHECKS_JSON" | jq '. | length')"
+  PASS_COUNT="$(echo "$FILTERED_CHECKS_JSON" | jq '[.[] | select(.bucket == "pass")] | length')"
+  PENDING_COUNT="$(echo "$FILTERED_CHECKS_JSON" | jq '[.[] | select(.bucket == "pending")] | length')"
+  FAIL_COUNT="$(echo "$FILTERED_CHECKS_JSON" | jq '[.[] | select(.bucket == "fail")] | length')"
+  SKIP_COUNT="$(echo "$FILTERED_CHECKS_JSON" | jq '[.[] | select(.bucket == "skipping")] | length')"
+  CANCEL_COUNT="$(echo "$FILTERED_CHECKS_JSON" | jq '[.[] | select(.bucket == "cancel")] | length')"
 
   CI_OK=false
   if [ "$TOTAL_CHECKS" -eq 0 ]; then

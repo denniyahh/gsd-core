@@ -194,12 +194,14 @@ function checkPrCi(prNumber) {
   }
   if (!Array.isArray(checks) || checks.length === 0) return null;
 
-  const total = checks.length;
-  const pass = checks.filter(c => c.bucket === 'pass').length;
-  const pending = checks.filter(c => c.bucket === 'pending').length;
-  const fail = checks.filter(c => c.bucket === 'fail').length;
-  const cancel = checks.filter(c => c.bucket === 'cancel').length;
-  const skip = checks.filter(c => c.bucket === 'skipping').length;
+  // Filter out advisory-only checks that fail prior to maintainer review (#5607)
+  const effectiveChecks = checks.filter(c => !/reviewed or maintainer/i.test(c.name || ''));
+  const total = effectiveChecks.length;
+  const pass = effectiveChecks.filter(c => c.bucket === 'pass').length;
+  const pending = effectiveChecks.filter(c => c.bucket === 'pending').length;
+  const fail = effectiveChecks.filter(c => c.bucket === 'fail').length;
+  const cancel = effectiveChecks.filter(c => c.bucket === 'cancel').length;
+  const skip = effectiveChecks.filter(c => c.bucket === 'skipping').length;
 
   let status = 'in_progress';
   if (pending === 0) {
@@ -210,7 +212,7 @@ function checkPrCi(prNumber) {
     }
   }
 
-  const failedJobs = checks.filter(c => c.bucket === 'fail' || c.bucket === 'cancel').map(c => c.name);
+  const failedJobs = effectiveChecks.filter(c => c.bucket === 'fail' || c.bucket === 'cancel').map(c => c.name);
 
   return {
     status,
